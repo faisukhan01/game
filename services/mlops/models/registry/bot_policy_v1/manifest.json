@@ -1,0 +1,16 @@
+{
+  "name": "bot_policy_v1",
+  "algo": "tabular_q",
+  "protocol": "v1",
+  "rules_hash": "0xbfb4742570daa8fb",
+  "eval_metrics": {
+    "avg_return_last20": 5.0792,
+    "episodes": 380,
+    "timesteps": 500000,
+    "wall_sec": 52.2,
+    "framework": "tabular_q"
+  },
+  "created_at": "2026-09-24T16:09:25Z",
+  "artifact": "policy.bin",
+  "seed": 1337
+}

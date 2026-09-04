@@ -1,5 +1,4 @@
-"""botlab — VOIDSTRIKE MLOps: RL bot-training pipeline, model registry, telemetry ETL."""
+"""VOIDSTRIKE botlab — RL training on the exact live simulation."""
 
 __version__ = "1.0.0"
-
-__all__ = ["__version__"]
+PROTOCOL = "v1"

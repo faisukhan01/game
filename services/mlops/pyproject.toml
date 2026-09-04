@@ -1,0 +1,32 @@
+[project]
+name = "botlab"
+version = "1.0.0"
+description = "VOIDSTRIKE MLOps: RL bot training, model registry, telemetry ETL"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.1",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+torch = ["torch>=2.2"]
+dev = ["pytest>=8.0", "ruff>=0.4"]
+
+[project.scripts]
+botlab = "botlab.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["botlab*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
