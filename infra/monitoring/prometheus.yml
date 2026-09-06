@@ -1,0 +1,10 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: voidstrike-gameserver
+    static_configs:
+      - targets: ["gameserver:3002"]
+  - job_name: voidstrike-leaderboard
+    static_configs:
+      - targets: ["leaderboard:8080"]

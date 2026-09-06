@@ -1,0 +1,24 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "VOIDSTRIKE Arena",
+	"Description": "Deterministic fixed-step arena simulation module for VOIDSTRIKE. Mirrors core/c Protocol v1 with golden-vector conformance and replication-ready snapshot codec.",
+	"Category": "Game",
+	"CreatedBy": "VOIDSTRIKE STUDIOS",
+	"CanContainContent": true,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "VoidstrikeArena",
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"AdditionalDependencies": [
+				"Engine",
+				"Core",
+				"CoreUObject",
+				"Networking"
+			]
+		}
+	]
+}
