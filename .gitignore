@@ -105,3 +105,7 @@ Thumbs.db
 *.pem
 *.key
 *.p12
+
+# --- sandbox scaffolding (not part of the product) ---
+skills/
+.zscripts/
