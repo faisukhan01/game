@@ -109,3 +109,4 @@ Thumbs.db
 # --- sandbox scaffolding (not part of the product) ---
 skills/
 .zscripts/
+mini-services/
