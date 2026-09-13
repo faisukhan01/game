@@ -12,6 +12,7 @@ import 'package:flame/events.dart';
 import 'package:flame/game.dart';
 
 import 'protocol.dart';
+import 'soldier.dart';
 
 enum BotAiState { patrol, chase, strafe, attack, flee }
 
@@ -32,6 +33,28 @@ class Fighter {
   double wpx = 0, wpy = 0;
   int orbitSign = 1;
   int waveN = 1;
+  // cosmetic animation (render layer only)
+  double faceAngle = 0;
+  double gait = 0, stride = 0, lastX = 0, lastY = 0;
+  double sinceShot = 9, shotDx = 1, shotDy = 0;
+  bool faceSeeded = false;
+  bool animInit = false;
+
+  void initAnim() {
+    if (!animInit) {
+      animInit = true;
+      lastX = x;
+      lastY = y;
+    }
+  }
+}
+
+/// Position-anchored muzzle flash (render layer).
+class Flash {
+  Flash(this.x, this.y, this.dx, this.dy, this.fromPlayer);
+  final double x, y, dx, dy;
+  final bool fromPlayer;
+  double life = 0.07;
 }
 
 class Bullet {
@@ -60,6 +83,7 @@ class VoidstrikeGame extends FlameGame with TapCallbacks {
   late Fighter player;
   final List<Fighter> bots = [];
   final List<Bullet> bullets = [];
+  final List<Flash> flashes = [];
 
   int score = 0, kills = 0, wave = 1, combo = 1;
   double comboTimer = 0, spawnTimer = VsBot.spawnStagger, elapsed = 0;
@@ -81,6 +105,10 @@ class VoidstrikeGame extends FlameGame with TapCallbacks {
 
   @override
   Future<void> onLoad() async {
+    // Letterbox the 1600×900 world onto any screen (phone/tablet/desktop).
+    camera.viewport = FixedResolutionViewport(
+      resolution: Vector2(VsWorld.width, VsWorld.height),
+    );
     player = Fighter(0, 800, 300, VsPlayer.radius)
       ..maxHp = VsPlayer.maxHp
       ..hp = VsPlayer.maxHp
@@ -99,9 +127,65 @@ class VoidstrikeGame extends FlameGame with TapCallbacks {
       steps++;
     }
     if (steps >= 5) _acc = 0;
+    _updateCosmetics(dt);
   }
 
   double _acc = 0;
+
+  /// Render-layer animation: facing smoothing, walk cycle, flashes.
+  void _updateCosmetics(double dt) {
+    player.initAnim();
+    _animate(player, dt, aimX, aimY);
+    for (final b in bots) {
+      if (!b.alive) continue;
+      b.initAnim();
+      var ax = 0.0, ay = 0.0;
+      if (b.state == BotAiState.attack || b.state == BotAiState.chase) {
+        ax = player.x - b.x;
+        ay = player.y - b.y;
+      } else if (math.sqrt(b.vx * b.vx + b.vy * b.vy) > 1) {
+        ax = b.vx;
+        ay = b.vy;
+      }
+      _animate(b, dt, ax, ay);
+    }
+    for (var i = flashes.length - 1; i >= 0; i--) {
+      flashes[i].life -= dt;
+      if (flashes[i].life <= 0) flashes.removeAt(i);
+    }
+  }
+
+  void _animate(Fighter f, double dt, double aimX2, double aimY2) {
+    final dx = f.x - f.lastX;
+    final dy = f.y - f.lastY;
+    final dist = math.sqrt(dx * dx + dy * dy);
+    f.lastX = f.x;
+    f.lastY = f.y;
+    if (dist > 0.05) f.gait += dist;
+    final speedRef = math.max(1.0, f.speed * dt);
+    final moveAmt = math.min(1.0, dist / speedRef);
+    f.stride += (moveAmt - f.stride) * (1 - math.exp(-14 * dt));
+    f.sinceShot += dt;
+
+    if (!f.faceSeeded) {
+      if (aimX2 * aimX2 + aimY2 * aimY2 > 1e-5) {
+        f.faceAngle = math.atan2(aimY2, aimX2);
+        f.faceSeeded = true;
+      }
+      return;
+    }
+    // Velocity heading (weak), recent shot snap (strong), then intent aim.
+    if (moveAmt > 0.08) {
+      final last = math.sqrt(f.vx * f.vx + f.vy * f.vy);
+      if (last > 1) {
+        f.faceAngle = steerAngle(f.faceAngle, f.vx / last, f.vy / last, dt, 9);
+      }
+    }
+    if (f.sinceShot < 0.45) {
+      f.faceAngle = steerAngle(f.faceAngle, f.shotDx, f.shotDy, dt, 16);
+    }
+    f.faceAngle = steerAngle(f.faceAngle, aimX2, aimY2, dt, f.id == 0 ? 18 : 10);
+  }
 
   void _tick(double dt) {
     if (matchOver) return;
@@ -225,13 +309,20 @@ class VoidstrikeGame extends FlameGame with TapCallbacks {
         180;
     final c = math.cos(jitter), s = math.sin(jitter);
     final rx = dx * c - dy * s, ry = dx * s + dy * c;
+    final mx = from.x + rx * (from.radius + 6);
+    final my = from.y + ry * (from.radius + 6);
     bullets.add(Bullet(
-      from.x + rx * (from.radius + 6),
-      from.y + ry * (from.radius + 6),
+      mx,
+      my,
       rx * (fromPlayer ? VsRifle.projectileSpeed : VsBot.projectileSpeed),
       ry * (fromPlayer ? VsRifle.projectileSpeed : VsBot.projectileSpeed),
       fromPlayer,
     ));
+    from.sinceShot = 0;
+    from.shotDx = rx;
+    from.shotDy = ry;
+    flashes.add(Flash(mx, my, rx, ry, fromPlayer));
+    if (flashes.length > 16) flashes.removeAt(0);
   }
 
   void _updateBot(Fighter b, double dt) {
@@ -364,15 +455,83 @@ class VoidstrikeGame extends FlameGame with TapCallbacks {
         Paint()..color = const Color(VsColors.panel),
       );
     }
-    final botPaint = Paint()..color = const Color(VsColors.flare);
+
+    // Hostile operatives.
     for (final b in bots.where((b) => b.alive)) {
-      canvas.drawCircle(Offset(b.x, b.y), b.radius, botPaint);
+      b.initAnim();
+      paintSoldier(
+        canvas,
+        x: b.x,
+        y: b.y,
+        radius: b.radius,
+        faceAngle: b.faceAngle,
+        moveAngle: (b.vx * b.vx + b.vy * b.vy > 1)
+            ? math.atan2(b.vy, b.vx)
+            : b.faceAngle,
+        gaitPhase: (b.gait / (b.radius * kVisualScale * 2.9)) * math.pi * 2,
+        stride: b.stride,
+        palette: SoldierPalette.bot,
+      );
+      if (b.hp < b.maxHp) {
+        final w = 30.0, frac = (b.hp / b.maxHp).clamp(0.0, 1.0);
+        final barY = b.y - b.radius * kVisualScale - 10;
+        canvas.drawRect(
+          Rect.fromLTWH(b.x - w / 2, barY, w, 3),
+          Paint()..color = const Color(0x1AFFFFFF),
+        );
+        canvas.drawRect(
+          Rect.fromLTWH(b.x - w / 2, barY, w * frac, 3),
+          Paint()..color = const Color(0xFFFF3D5A),
+        );
+      }
     }
-    final pPaint = Paint()..color = const Color(VsColors.volt);
-    if (player.alive) canvas.drawCircle(Offset(player.x, player.y), player.radius, pPaint);
+
+    // Striker operative + dash-ready ring.
+    if (player.alive) {
+      player.initAnim();
+      canvas.drawCircle(
+        Offset(player.x, player.y),
+        player.radius * kVisualScale + 6,
+        Paint()
+          ..color = const Color(0xFFC8F31D)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5
+          ..alpha = player.fireCd <= 0 ? 102 : 31,
+      );
+      paintSoldier(
+        canvas,
+        x: player.x,
+        y: player.y,
+        radius: player.radius,
+        faceAngle: player.faceAngle,
+        moveAngle: (player.vx * player.vx + player.vy * player.vy > 1)
+            ? math.atan2(player.vy, player.vx)
+            : player.faceAngle,
+        gaitPhase: (player.gait / (player.radius * kVisualScale * 2.9)) * math.pi * 2,
+        stride: player.stride,
+        palette: SoldierPalette.player,
+      );
+    }
+
+    // Bullets.
     final bPaint = Paint()..color = const Color(VsColors.amber);
     for (final p in bullets) {
       canvas.drawCircle(Offset(p.x, p.y), p.radius, bPaint);
+    }
+
+    // Muzzle flashes on top of the barrels (extended to the visual muzzle —
+    // the sim spawns projectiles closer to the body than the gun tip).
+    final ext = muzzleExtension(player.radius);
+    for (final fl in flashes) {
+      paintMuzzleFlash(
+        canvas,
+        x: fl.x + fl.dx * ext,
+        y: fl.y + fl.dy * ext,
+        dirX: fl.dx,
+        dirY: fl.dy,
+        fromPlayer: fl.fromPlayer,
+        intensity: fl.life / 0.07,
+      );
     }
   }
 }

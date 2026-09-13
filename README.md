@@ -12,6 +12,7 @@ nine platform targets.
 `PROTOCOL v1` · `rules_hash 0xbfb4742570daa8fb`
 
 [![ci](https://github.com/faisukhan01/game/actions/workflows/ci.yml/badge.svg)](https://github.com/faisukhan01/game/actions/workflows/ci.yml)
+[![android apk](https://img.shields.io/badge/Android-APK%20download-3DDC84)](https://github.com/faisukhan01/game/releases/tag/apk-latest)
 ![ platforms ](https://img.shields.io/badge/platforms-9-8A939E)
 ![ tick rate ](https://img.shields.io/badge/tick%20rate-60Hz-C8F31D)
 
@@ -50,6 +51,14 @@ core/c (reference) ──► testdata/golden/ticks.json
 | **`clients/unreal/`** | UE5, C++ | `VoidstrikeArena` module: fixed-step sim subsystem, replication-ready snapshot codec |
 
 ## Quickstart
+
+### 📱 Play on Android (no build needed)
+
+Grab the latest signed release APK straight from the rolling CI release:
+
+**https://github.com/faisukhan01/game/releases/tag/apk-latest**
+
+Download `VOIDSTRIKE-mobile-latest.apk` on your device, allow *install unknown apps*, install, and drop into the arena. The APK is rebuilt automatically on every green `main` push (universal ABI, min Android 7.0). Tagged releases (`v*`) get versioned APKs attached to the tag release.
 
 ```bash
 # 1. The deterministic core — 10,023 assertions

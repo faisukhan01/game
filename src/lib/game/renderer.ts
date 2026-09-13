@@ -7,6 +7,15 @@
 
 import { OBSTACLES, WORLD_H, WORLD_W } from "@/lib/sim/constants";
 import type { World } from "@/lib/sim/world";
+import {
+  drawFighter,
+  drawMuzzleFlash,
+  drawReticle,
+  muzzleExtension,
+  PALETTE_BOT,
+  PALETTE_PLAYER,
+  VISUAL_SCALE,
+} from "./characters";
 import { Effects, FX_COLORS } from "./effects";
 
 const GRID = 24;
@@ -24,11 +33,16 @@ function strokeCornerTicks(ctx: CanvasRenderingContext2D): void {
   ctx.stroke();
 }
 
+/**
+ * `dtSec` is the clamped real-frame delta used only for cosmetic animation
+ * (facing smoothing, gait) — never for simulation.
+ */
 export function renderGame(
   ctx: CanvasRenderingContext2D,
   world: World,
   fx: Effects,
   monoFont: string,
+  dtSec: number,
 ): void {
   ctx.save();
 
@@ -75,14 +89,21 @@ export function renderGame(
   }
   ctx.stroke();
 
-  // Dash afterimages.
+  // Dash afterimages — soft energy blooms, newest on top.
   for (const a of fx.afterimages) {
     if (a.life <= 0) continue;
-    ctx.globalAlpha = (a.life / 0.28) * 0.30;
+    const k = a.life / 0.28;
+    ctx.globalAlpha = k * 0.34;
     ctx.fillStyle = "#C8F31D";
     ctx.beginPath();
-    ctx.arc(a.x, a.y, 14, 0, Math.PI * 2);
+    ctx.arc(a.x, a.y, 6 + 10 * (1 - k), 0, Math.PI * 2);
     ctx.fill();
+    ctx.globalAlpha = k * 0.22;
+    ctx.strokeStyle = "#C8F31D";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(a.x, a.y, 13, 0, Math.PI * 2);
+    ctx.stroke();
   }
   ctx.globalAlpha = 1;
 
@@ -97,6 +118,48 @@ export function renderGame(
     ctx.stroke();
   }
   ctx.globalAlpha = 1;
+
+  // Hostile operatives.
+  const pl = world.player;
+  for (const b of world.bots) {
+    if (b.dead) continue;
+    // Intent heading: engage vector while attacking, else travel heading.
+    let aimX = 0;
+    let aimY = 0;
+    if (b.state === "ATTACK" || b.state === "CHASE") {
+      aimX = pl.x - b.x;
+      aimY = pl.y - b.y;
+    } else if (Math.hypot(b.vx, b.vy) > 1) {
+      aimX = b.vx;
+      aimY = b.vy;
+    }
+    drawFighter(ctx, b, aimX, aimY, PALETTE_BOT, dtSec, { isPlayer: false });
+    // HP bar when damaged.
+    if (b.hp < b.maxHp) {
+      const w = 30;
+      const frac = Math.max(0, b.hp / b.maxHp);
+      const barY = b.y - b.radius * VISUAL_SCALE - 10;
+      ctx.fillStyle = "rgba(255,255,255,0.10)";
+      ctx.fillRect(b.x - w / 2, barY, w, 3);
+      ctx.fillStyle = "#FF3D5A";
+      ctx.fillRect(b.x - w / 2, barY, w * frac, 3);
+    }
+  }
+
+  // Striker operative (skip if dead — death burst covers it).
+  if (!pl.dead) {
+    // Dash-ready ring.
+    ctx.globalAlpha = pl.dashCd <= 0 ? 0.4 : 0.12;
+    ctx.strokeStyle = "#C8F31D";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(pl.x, pl.y, pl.radius * VISUAL_SCALE + 5, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    drawFighter(ctx, pl, pl.aimX, pl.aimY, PALETTE_PLAYER, dtSec, { isPlayer: true });
+    drawReticle(ctx, pl.x, pl.y, pl.aimX, pl.aimY, pl.radius * VISUAL_SCALE + 32);
+  }
 
   // Projectiles: trail line + core, grouped per team.
   ctx.lineWidth = 3;
@@ -118,60 +181,20 @@ export function renderGame(
   }
   ctx.stroke();
 
-  // Bots.
-  for (const b of world.bots) {
-    if (b.dead) continue;
-    // Body.
-    ctx.fillStyle = "rgba(255,61,90,0.16)";
-    ctx.beginPath();
-    ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = "#FF3D5A";
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-    // Core.
-    ctx.fillStyle = "#FF3D5A";
-    ctx.beginPath();
-    ctx.arc(b.x, b.y, b.radius * 0.42, 0, Math.PI * 2);
-    ctx.fill();
-    // HP bar when damaged.
-    if (b.hp < b.maxHp) {
-      const w = 26;
-      const frac = Math.max(0, b.hp / b.maxHp);
-      ctx.fillStyle = "rgba(255,255,255,0.10)";
-      ctx.fillRect(b.x - w / 2, b.y - b.radius - 10, w, 3);
-      ctx.fillStyle = "#FF3D5A";
-      ctx.fillRect(b.x - w / 2, b.y - b.radius - 10, w * frac, 3);
-    }
-  }
-
-  // Player (skip if dead — death burst covers it).
-  const p = world.player;
-  if (!p.dead) {
-    // Dash-ready ring.
-    ctx.globalAlpha = p.dashCd <= 0 ? 0.4 : 0.12;
-    ctx.strokeStyle = "#C8F31D";
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, p.radius + 5, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.globalAlpha = 1;
-
-    ctx.fillStyle = "#C8F31D";
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "#07080A";
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, p.radius * 0.45, 0, Math.PI * 2);
-    ctx.fill();
-    // Aim tick.
-    ctx.strokeStyle = "#C8F31D";
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
-    ctx.moveTo(p.x + p.aimX * (p.radius + 3), p.y + p.aimY * (p.radius + 3));
-    ctx.lineTo(p.x + p.aimX * (p.radius + 13), p.y + p.aimY * (p.radius + 13));
-    ctx.stroke();
+  // Muzzle flashes sit right on top of the barrels (extended to the visual
+  // muzzle — the sim spawns projectiles closer to the body than the gun tip).
+  const ext = muzzleExtension(world.player.radius);
+  for (const fl of fx.flashes) {
+    if (fl.life <= 0) continue;
+    drawMuzzleFlash(
+      ctx,
+      fl.x + fl.dx * ext,
+      fl.y + fl.dy * ext,
+      fl.dx,
+      fl.dy,
+      fl.team,
+      fl.life / fl.maxLife,
+    );
   }
 
   // Particles — grouped per color (batched state changes).
