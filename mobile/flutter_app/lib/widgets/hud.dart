@@ -3,7 +3,9 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../game/protocol.dart' show VsColors;
 import '../game/voidstrike_game.dart';
+import 'protocol_shim.dart';
 
 export '../game/voidstrike_game.dart' show MatchResult;
 
@@ -11,19 +13,18 @@ export '../game/voidstrike_game.dart' show MatchResult;
 /// coordinates into Protocol world coordinates.
 class StickState {
   Offset origin = Offset.zero;
+  Size screen = Size.zero;
   bool aiming = false;
 
   void startAim(Offset local, Size screen) {
     origin = local;
+    this.screen = screen;
     aiming = true;
   }
 
   void updateAim(Offset local, VoidstrikeGame game) {
     if (!aiming) return;
-    final scale = game.canvasScaleFor(screen);
-    final wx = local.dx / scale;
-    final wy = local.dy / scale;
-    game.aimFromWorld(wx, wy);
+    game.aimFromScreen(local, screen);
   }
 
   void endAim() => aiming = false;

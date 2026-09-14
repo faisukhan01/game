@@ -5,3 +5,6 @@ analyzer:
     strict-casts: true
   errors:
     invalid_annotation_target: ignore
+  exclude:
+    - build/**
+    - android/**

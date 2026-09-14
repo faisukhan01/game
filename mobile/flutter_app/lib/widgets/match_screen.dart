@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flame/game.dart';
 
 import '../game/voidstrike_game.dart';
+import 'hud.dart' show HudOverlay, StickState, VirtualStick;
 import 'protocol_shim.dart';
 
 /// Match screen: game canvas + twin-stick touch controls + HUD overlay.
