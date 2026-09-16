@@ -209,8 +209,8 @@ void paintSoldier(
   canvas.restore();
 
   // Arms — two-handed grip on the rifle.
-  final fxx = (double l, double p) => x + c * l - s * p;
-  final fyy = (double l, double p) => y + s * l + c * p;
+  double fxx(double l, double p) => x + c * l - s * p;
+  double fyy(double l, double p) => y + s * l + c * p;
   _capsule(
     canvas,
     fxx(S * 0.04, -S * 0.6),

@@ -9,7 +9,6 @@ import 'dart:math' as math;
 import 'dart:ui' show Canvas, Color, Offset, Paint, PaintingStyle, Rect;
 
 import 'package:flame/camera.dart';
-import 'package:flame/components.dart';
 import 'package:flame/events.dart';
 import 'package:flame/game.dart';
 
@@ -521,9 +520,9 @@ class VoidstrikeGame extends FlameGame with TapCallbacks {
         player.radius * kVisualScale + 6,
         Paint()
           ..color = const Color(0xFFC8F31D)
+              .withValues(alpha: player.fireCd <= 0 ? 0.4 : 0.12)
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.5
-          ..alpha = player.fireCd <= 0 ? 102 : 31,
+          ..strokeWidth = 1.5,
       );
       paintSoldier(
         canvas,

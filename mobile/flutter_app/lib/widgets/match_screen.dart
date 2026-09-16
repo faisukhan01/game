@@ -2,6 +2,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flame/game.dart';
 
+import '../game/protocol.dart' show VsColors;
 import '../game/voidstrike_game.dart';
 import 'hud.dart' show HudOverlay, StickState, VirtualStick;
 import 'protocol_shim.dart';
