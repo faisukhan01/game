@@ -94,11 +94,14 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - uses: android-actions/setup-android@v3
+      # Runners ship the Android SDK; just accept licenses (setup-android
+      # action has been flaky, and the preinstalled SDK is sufficient).
+      - name: Accept Android SDK licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
       - name: Assemble debug APK
         run: |
           cd mobile/android_companion
-          gradle :app:assembleDebug --no-daemon || echo "::warning::AGP requires gradle wrapper — generated on first local run"
+          gradle :app:assembleDebug --no-daemon || echo "::warning::companion build needs a gradle wrapper — generate locally and commit it"
 
   flutter:
     runs-on: ubuntu-latest

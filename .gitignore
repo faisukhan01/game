@@ -20,6 +20,11 @@ Caddyfile
 db/*.db
 db/*.db-journal
 .env
+
+# ...except the product test suites (the `tests/` rule above is for the
+# sandbox scratch dir only):
+!core/c/tests/
+!services/mlops/tests/
 .env.*
 !.env.example
 
