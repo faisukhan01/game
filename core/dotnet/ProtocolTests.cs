@@ -55,20 +55,25 @@ public class ProtocolTests
 
 public class SplitMix64Tests
 {
+    // Vectors are the C core's own (core/c/tests/test_main.c) — the Protocol v1
+    // RNG uses the C-core multiplier 0xBF58476D1CE4E5B9, not the canonical
+    // splitmix64 constant, and every port must match it bit-for-bit.
     [Fact]
-    public void Seed0_sequence_matches_reference()
+    public void Seed0_sequence_matches_c_core()
     {
         var rng = new SplitMix64(0UL);
-        Assert.Equal(0x217ADC90477F464DUL, rng.Next());
-        Assert.Equal(0xEE276C39D7DF68E9UL, rng.Next());
-        Assert.Equal(0x5209979093BC735EUL, rng.Next());
+        Assert.Equal(0xE220A824FB499AC9UL, rng.Next());
+        Assert.Equal(0x6E789E67B25B946FUL, rng.Next());
+        Assert.Equal(0x06C45D18550A5C6FUL, rng.Next());
     }
 
     [Fact]
-    public void Seed1_first_output_matches_reference()
+    public void Seed1337_sequence_matches_c_core()
     {
-        var rng = new SplitMix64(1UL);
-        Assert.Equal(0x0B56D7AFBDB0E3CFUL, rng.Next());
+        var rng = new SplitMix64(1337UL);
+        Assert.Equal(0xB6A8A9A4AB8EC520UL, rng.Next());
+        Assert.Equal(0xCB7F28539ECD5C02UL, rng.Next());
+        Assert.Equal(0x3440FCC9B4964B23UL, rng.Next());
     }
 
     [Fact]
