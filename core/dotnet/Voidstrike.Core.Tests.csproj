@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    VOIDSTRIKE Core — .NET conformance harness for the C# Protocol port.
+    Compiles the exact Protocol.cs that ships inside the Unity package
+    (clients/unity/Packages/com.voidstrike.core) via a source link, so CI
+    validates the same file Unity consumes. Golden vectors mirror
+    core/c/tests/test_main.c and testdata/golden/ticks.json.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <AssemblyName>Voidstrike.Core.Tests</AssemblyName>
+    <RootNamespace>Voidstrike.Core.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="../../clients/unity/Packages/com.voidstrike.core/Runtime/Protocol.cs" Link="Protocol.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+</Project>
