@@ -1,20 +1,18 @@
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flame/game.dart';
 
 import '../game/protocol.dart' show VsColors;
 import '../game/voidstrike_game.dart';
-import 'hud.dart' show HudOverlay, StickState, VirtualStick;
+import 'hud.dart' show ActionButton, HudOverlay, VirtualStick;
 import 'protocol_shim.dart';
 
-/// Match screen: game canvas + twin-stick touch controls + HUD overlay.
+/// Match screen: side-view game canvas with a follow camera + twin-stick
+/// touch controls (left = move, right = aim) + FIRE / DASH / NOVA buttons.
 class MatchScreen extends StatelessWidget {
   MatchScreen({super.key, required this.callsign, required this.onResult});
 
   final String callsign;
   final ValueChanged<MatchResult> onResult;
-
-  final _stick = StickState();
 
   @override
   Widget build(BuildContext context) {
@@ -22,83 +20,87 @@ class MatchScreen extends StatelessWidget {
       onResult(r);
       if (context.mounted) Navigator.of(context).pop();
     });
+    final pad = MediaQuery.paddingOf(context);
+    const volt = Color(VsColors.volt);
+    const flare = Color(VsColors.flare);
+    const mint = Color(0xFF29E086);
 
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          // aim layer
-          LayoutBuilder(builder: (context, constraints) {
-            return GestureDetector(
-              onPanStart: (d) => _stick.startAim(d.localPosition, constraints.biggest),
-              onPanUpdate: (d) => _stick.updateAim(d.localPosition, game),
-              onPanEnd: (_) => _stick.endAim(),
-              onPanCancel: _stick.endAim,
-              child: MouseRegion(
-                onHover: (e) => game.aimFromScreen(e.localPosition, constraints.biggest),
-                child: Listener(
-                  onPointerDown: (e) {
-                    if (e.buttons == kPrimaryMouseButton) game.firing = true;
-                  },
-                  onPointerUp: (_) => game.firing = false,
-                  child: GameWidget(game: game),
-                ),
-              ),
-            );
-          }),
-          // HUD
+          // Game canvas (desktop hover aim still works via mouse).
+          Positioned.fill(
+            child: MouseRegion(
+              onHover: (e) {
+                game.aimFromScreen(e.localPosition, MediaQuery.sizeOf(context));
+                game.noteManualAim();
+              },
+              child: GameWidget(game: game),
+            ),
+          ),
+          // HUD.
           HudOverlay(game: game, callsign: callsign),
-          // move stick (left)
+          // Move stick — bottom left.
           Positioned(
-            left: 16,
-            bottom: 16,
+            left: 16 + pad.left,
+            bottom: 16 + pad.bottom,
             child: VirtualStick(
-              state: _stick,
+              label: 'MOVE',
+              color: volt,
               onMove: (x, y) {
                 game.moveX = x;
                 game.moveY = y;
               },
             ),
           ),
-          // action buttons (right)
+          // Aim stick — bottom right, inboard of the action buttons.
           Positioned(
-            right: 16,
-            bottom: 16,
-            child: Row(
+            right: 96 + pad.right,
+            bottom: 16 + pad.bottom,
+            child: VirtualStick(
+              label: 'AIM',
+              color: flare,
+              onMove: (x, y) {
+                if (x != 0 || y != 0) {
+                  game.aimX = x;
+                  game.aimY = y;
+                  game.noteManualAim();
+                }
+              },
+            ),
+          ),
+          // Action buttons — bottom right edge.
+          Positioned(
+            right: 16 + pad.right,
+            bottom: 16 + pad.bottom,
+            child: Column(
               children: [
-                _ActionButton(label: 'DASH', onTap: () => game.dashQueued = true),
-                const SizedBox(width: 10),
-                _ActionButton(label: 'NOVA', onTap: () => game.novaQueued = true),
+                ActionButton(
+                  label: 'NOVA',
+                  color: volt,
+                  size: 52,
+                  onPress: () => game.novaQueued = true,
+                ),
+                const SizedBox(height: 10),
+                ActionButton(
+                  label: 'DASH',
+                  color: mint,
+                  size: 52,
+                  onPress: () => game.dashQueued = true,
+                ),
+                const SizedBox(height: 10),
+                ActionButton(
+                  label: 'FIRE',
+                  color: flare,
+                  size: 72,
+                  onPress: () => game.firing = true,
+                  onRelease: () => game.firing = false,
+                ),
               ],
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _ActionButton extends StatelessWidget {
-  const _ActionButton({required this.label, required this.onTap});
-
-  final String label;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 64,
-        height: 64,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          border: Border.all(color: const Color(VsColors.volt), width: 1.5),
-          color: Colors.black54,
-        ),
-        child: Text(label,
-            style: const TextStyle(
-                color: Color(VsColors.ink), fontSize: 11, letterSpacing: 1.5)),
       ),
     );
   }

@@ -9,6 +9,7 @@
 import { useEffect, useRef } from "react";
 import { World } from "@/lib/sim/world";
 import { WORLD_H, WORLD_W } from "@/lib/sim/constants";
+import { worldYFromGround } from "@/lib/game/characters";
 import { Effects } from "@/lib/game/effects";
 import { InputManager } from "@/lib/game/input";
 import { GameLoop, type HudRefs } from "@/lib/game/loop";
@@ -115,11 +116,13 @@ export function Arena() {
     const ro = new ResizeObserver(resize);
     ro.observe(wrap);
 
-    /* pointer aim + fire */
+    /* pointer aim + fire (screen y is the tilted floor — invert projection) */
     const toWorld = (clientX: number, clientY: number) => {
       const rect = canvas.getBoundingClientRect();
       const scale = rect.width / WORLD_W || 1;
-      input.setMouseWorld((clientX - rect.left) / scale, (clientY - rect.top) / scale);
+      const sx = (clientX - rect.left) / scale;
+      const sy = (clientY - rect.top) / scale;
+      input.setMouseWorld(sx, worldYFromGround(sy));
     };
     const onMove = (e: PointerEvent) => {
       if (e.pointerType === "mouse") toWorld(e.clientX, e.clientY);
@@ -288,7 +291,7 @@ export function Arena() {
         <canvas
           ref={canvasRef}
           className="block touch-none bg-void"
-          aria-label="VOIDSTRIKE arena — top-down twin-stick shooter canvas"
+          aria-label="VOIDSTRIKE arena — side-view twin-stick shooter canvas"
           role="img"
         />
 

@@ -1,17 +1,42 @@
 /**
- * VOIDSTRIKE — procedural soldier characters.
+ * VOIDSTRIKE — side-view soldier characters (2.5D billboard rig).
  *
- * Draws top-down humanoid operatives (boots, torso armor, shoulder plates,
- * helmet + visor, two-handed rifle rig) for the player and every hostile.
- * Purely cosmetic render-layer code: the deterministic sim is never touched.
+ * The deterministic sim is top-down; the presentation layer projects the
+ * floor plane with a fixed camera pitch (TILT) and draws every operative
+ * as an upright side-view soldier: articulated legs with a walk cycle,
+ * armored torso, backpack, helmeted head with visor, and a two-handed
+ * rifle that tracks the aim vector (with a clamped visual pitch).
  *
- * Animation state (gait phase, smoothed facing, per-bot shot tracking) lives
- * in a WeakMap keyed by the sim entities themselves — no allocation per
- * frame, no cleanup needed, zero coupling back into World.
+ * Purely cosmetic render-layer code: the deterministic sim is never
+ * touched. Animation state (gait phase, smoothed facing, per-bot shot
+ * tracking) lives in a WeakMap keyed by the sim entities themselves —
+ * no allocation per frame, no cleanup, zero coupling back into World.
  */
 
 import type { Fighter } from "@/lib/sim/types";
 import type { World } from "@/lib/sim/world";
+
+// ---------------------------------------------------------------- projection
+
+/** Camera pitch — floor y is squashed by this factor on screen. */
+export const TILT = 0.58;
+
+/**
+ * Vertical offset that centers the projected arena inside the 1600×900
+ * canvas: floor spans GROUND_OFFSET..GROUND_OFFSET + WORLD_H*TILT, with
+ * soldier rigs reaching ~100 units above their ground anchor.
+ */
+export const GROUND_OFFSET = 238;
+
+/** Floor-space y → screen-space ground line y. */
+export function groundY(worldY: number): number {
+  return worldY * TILT + GROUND_OFFSET;
+}
+
+/** Screen-space ground line y → floor-space y (inverse of groundY). */
+export function worldYFromGround(gy: number): number {
+  return (gy - GROUND_OFFSET) / TILT;
+}
 
 export interface SoldierPalette {
   /** Armor base. */
@@ -56,13 +81,13 @@ export const PALETTE_BOT: SoldierPalette = {
 
 /**
  * Soldiers are drawn well above their sim collision radius so the rig
- * (rifle, shoulder plates, boots) reads at arena scale.
+ * (rifle, torso, legs) reads at arena scale.
  */
 export const VISUAL_SCALE = 2.6;
 
 /** Where the visual barrel tip sits, in world units from the fighter origin. */
 export function visualMuzzle(radius: number): number {
-  return radius * VISUAL_SCALE * 1.12;
+  return radius * VISUAL_SCALE * 1.06;
 }
 
 /**
@@ -73,10 +98,53 @@ export function muzzleExtension(radius: number): number {
   return Math.max(0, visualMuzzle(radius) - (radius + 6));
 }
 
+/** Rig proportions (fractions of S = radius * VISUAL_SCALE). */
+const LEG_L = 0.92;
+const TORSO_H = 0.88;
+const TORSO_W = 0.74;
+const HEAD_R = 0.30;
+/** Height of the rifle line above the ground anchor (gun shoulder line). */
+const SHOULDER_LIFT = LEG_L + TORSO_H - 0.2;
+/** Chest line used to float tracers / reticle / flashes above the floor. */
+const CHEST_LIFT = LEG_L + TORSO_H * 0.55;
+
+/** Visual muzzle pitch clamp (radians from horizontal). */
+const MAX_PITCH = 1.05;
+
+export function soldierChestLift(radius: number): number {
+  return radius * VISUAL_SCALE * CHEST_LIFT;
+}
+
+/**
+ * Gun-muzzle tip for a fighter in screen space (projected ground line,
+ * chest height). Used by the renderer to anchor muzzle flashes.
+ */
+export function gunTip(
+  f: Fighter,
+  aimX: number,
+  aimY: number,
+): { x: number; y: number } {
+  const S = f.radius * VISUAL_SCALE;
+  const dir = aimX >= 0 ? 1 : -1;
+  const pitch = clampPitch(aimX, aimY);
+  const gl = S * 0.98;
+  return {
+    x: f.x + dir * Math.cos(pitch) * gl,
+    y: groundY(f.y) - S * SHOULDER_LIFT - Math.sin(pitch) * gl,
+  };
+}
+
+function clampPitch(aimX: number, aimY: number): number {
+  const p = Math.atan2(-aimY * TILT, Math.abs(aimX) + 1e-5);
+  return Math.max(-MAX_PITCH, Math.min(MAX_PITCH, p));
+}
+
 interface FighterAnim {
   /** Smoothed facing direction (unit-ish vector). */
   fx: number;
   fy: number;
+  /** Body side: 1 = faces right, -1 = faces left (hysteresis on aim). */
+  dir: 1 | -1;
   /** Last ticked position, for velocity + gait measurement. */
   lx: number;
   ly: number;
@@ -101,6 +169,7 @@ function animFor(f: Fighter): FighterAnim {
     a = {
       fx: 1,
       fy: 0,
+      dir: 1,
       lx: f.x,
       ly: f.y,
       gait: 0,
@@ -203,8 +272,9 @@ export interface FighterDrawOpts {
 }
 
 /**
- * Update + draw one operative. `aimX/aimY` is the intent direction (player
- * reticle or bot attack heading); facing is smoothed per frame.
+ * Update + draw one operative as an upright side-view soldier standing at
+ * its projected floor anchor. `aimX/aimY` is the intent direction (player
+ * reticle or bot attack heading) in floor space.
  * `dt` is the real frame delta (seconds, clamped by the caller).
  */
 export function drawFighter(
@@ -230,7 +300,7 @@ export function drawFighter(
   const moveAmt = Math.min(1, dist / speedRef);
   a.stride += (moveAmt - a.stride) * (1 - Math.exp(-14 * dt));
 
-  // --- facing -------------------------------------------------------------
+  // --- facing (smoothing feeds the rifle snap; body side is hysteresis) ----
   a.sinceShot += dt;
   if (moveAmt > 0.08) {
     const last = Math.hypot(f.vx, f.vy);
@@ -238,148 +308,149 @@ export function drawFighter(
   }
   if (a.sinceShot < 0.45) steer(a, a.shotDx, a.shotDy, dt, 16);
   steer(a, aimX, aimY, dt, opts.isPlayer ? 18 : 10);
-  const ang = Math.atan2(a.fy, a.fx);
+
+  // Body side flips only when the intent clearly crosses the vertical —
+  // hysteresis stops jitter while tracking a target nearly overhead.
+  const side = Math.abs(aimX) > 0.14 ? (aimX >= 0 ? 1 : -1) : a.dir;
+  a.dir = side;
+  const dir = side;
 
   const S = f.radius * VISUAL_SCALE;
-  const c = Math.cos(ang);
-  const s = Math.sin(ang);
-  // Facing-frame helpers: FX(l,p) = forward l, side p (positive = right).
-  const FX = (l: number, p: number) => f.x + c * l - s * p;
-  const FY = (l: number, p: number) => f.y + s * l + c * p;
+  const ax = f.x;
+  const ay = groundY(f.y);
 
-  // --- team glow + shadow -------------------------------------------------
-  ctx.fillStyle = volt ? "rgba(200,243,29,0.09)" : "rgba(255,61,90,0.11)";
+  // --- team glow + contact shadow (symmetric, under everything) -----------
+  ctx.fillStyle = volt ? "rgba(200,243,29,0.07)" : "rgba(255,61,90,0.08)";
   ctx.beginPath();
-  ctx.arc(f.x, f.y, S * 1.42, 0, Math.PI * 2);
+  ctx.ellipse(ax, ay - S * 0.1, S * 1.15, S * 0.5, 0, 0, Math.PI * 2);
   ctx.fill();
-  ctx.fillStyle = "rgba(0,0,0,0.4)";
+  ctx.fillStyle = "rgba(0,0,0,0.45)";
   ctx.beginPath();
-  ctx.ellipse(f.x + 2, f.y + 3, S * 0.92, S * 0.55, ang, 0, Math.PI * 2);
+  ctx.ellipse(ax, ay + S * 0.04, S * 0.62, S * 0.2, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // --- boots (walk cycle along the movement heading) -----------------------
-  const phase = (a.gait / (S * 2.9)) * Math.PI * 2;
-  const swing = S * 0.26 * a.stride;
-  const wob = Math.sin(phase) * swing;
-  const mvx = moveAmt > 0.08 ? dx / Math.max(dist, 1e-4) : c;
-  const mvy = moveAmt > 0.08 ? dy / Math.max(dist, 1e-4) : s;
-  const ma = Math.atan2(mvy, mvx);
-  const mc = Math.cos(ma);
-  const ms = Math.sin(ma);
-  const legGap = S * 0.3;
-  const legLen = S * 0.4;
-  for (let i = 0; i < 2; i++) {
-    const ph = i === 0 ? wob : -wob;
-    const bx = f.x + mc * ph - ms * (i === 0 ? legGap : -legGap);
-    const by = f.y + ms * ph + mc * (i === 0 ? -legGap : legGap);
-    ctx.strokeStyle = palette.gear;
-    capsule(
-      ctx,
-      bx - mc * legLen * 0.3,
-      by - ms * legLen * 0.3,
-      bx + mc * legLen * 0.36,
-      by + ms * legLen * 0.36,
-      S * 0.24,
-    );
-  }
+  // --- walk cycle ----------------------------------------------------------
+  const phase0 = (a.gait / (S * 2.9)) * Math.PI * 2;
+  // Walking away from the aim side reads as a backward shuffle — invert.
+  const backPedal = moveAmt > 0.08 && dx / Math.max(dist, 1e-4) * dir < 0;
+  const phase = backPedal ? -phase0 : phase0;
+  const swing = S * 0.42 * a.stride;
+  const bob = Math.abs(Math.sin(phase0)) * S * 0.05 * a.stride;
+  const hipY = -S * LEG_L + bob;
+  const torsoTop = hipY - S * TORSO_H;
+  const headCy = torsoTop - S * HEAD_R * 0.95;
+  const shoulderX = S * 0.1;
+  const shoulderY = torsoTop + S * 0.24;
 
-  // --- rifle (under the arms, over the boots) ------------------------------
-  ctx.save();
-  ctx.translate(f.x, f.y);
-  ctx.rotate(ang);
-  // Stock.
-  ctx.fillStyle = palette.gunDark;
-  roundRect(ctx, -S * 0.24, -S * 0.085, S * 0.42, S * 0.17, S * 0.055);
-  ctx.fill();
-  // Receiver.
-  ctx.fillStyle = palette.gun;
-  roundRect(ctx, S * 0.16, -S * 0.105, S * 0.56, S * 0.21, S * 0.055);
-  ctx.fill();
-  // Energy cell — team-colored, keeps the rifle readable on the void.
-  ctx.fillStyle = palette.armor;
-  roundRect(ctx, S * 0.24, -S * 0.045, S * 0.3, S * 0.09, S * 0.03);
-  ctx.fill();
-  // Barrel.
-  ctx.fillStyle = palette.gunDark;
-  roundRect(ctx, S * 0.7, -S * 0.055, S * 0.44, S * 0.11, S * 0.03);
-  ctx.fill();
-  // Magazine.
-  ctx.save();
-  ctx.translate(S * 0.4, S * 0.11);
-  ctx.rotate(0.34);
-  ctx.fillStyle = palette.gunDark;
-  roundRect(ctx, 0, 0, S * 0.12, S * 0.28, S * 0.04);
-  ctx.fill();
-  ctx.restore();
-  // Front sight.
-  ctx.fillStyle = palette.gunDark;
-  roundRect(ctx, S * 0.94, -S * 0.14, S * 0.1, S * 0.1, S * 0.02);
-  ctx.fill();
-  ctx.restore();
+  // Rifle geometry follows the (clamped) aim pitch in the flipped frame.
+  const pitch = clampPitch(aimX, aimY);
+  const ga = -pitch; // local frame: +y is down
+  const gc = Math.cos(ga);
+  const gs = Math.sin(ga);
+  const gripX = shoulderX + gc * S * 0.16;
+  const gripY = shoulderY + gs * S * 0.16 + S * 0.05;
+  const foreX = shoulderX + gc * S * 0.42;
+  const foreY = shoulderY + gs * S * 0.42;
 
-  // --- torso ---------------------------------------------------------------
   ctx.save();
-  ctx.translate(f.x, f.y);
-  ctx.rotate(ang);
-  // Backpack.
+  ctx.translate(ax, ay);
+  ctx.scale(dir, 1);
+
+  // -- far leg (drawn first, shaded) ---------------------------------------
+  const drawLeg = (i: 0 | 1, far: boolean): void => {
+    const p = phase + (i === 0 ? 0 : Math.PI);
+    const footX = Math.sin(p) * swing;
+    const footY = -Math.max(0, Math.cos(p)) * S * 0.18;
+    const hipX = i === 0 ? -S * 0.06 : S * 0.06;
+    const kneeX = (hipX + footX) / 2 + S * 0.12;
+    const kneeY = (hipY + footY) / 2;
+    ctx.strokeStyle = far ? palette.armorDark : palette.gear;
+    capsule(ctx, hipX, hipY, kneeX, kneeY, S * 0.2);
+    capsule(ctx, kneeX, kneeY, footX, footY, S * 0.15);
+    // Boot.
+    ctx.fillStyle = far ? palette.gunDark : palette.gear;
+    roundRect(ctx, footX - S * 0.1, footY - S * 0.07, S * 0.3, S * 0.14, S * 0.06);
+    ctx.fill();
+  };
+  drawLeg(0, true);
+
+  // -- rear arm (behind torso) ----------------------------------------------
+  ctx.strokeStyle = palette.armorDark;
+  capsule(ctx, -S * 0.08, shoulderY + S * 0.06, foreX, foreY, S * 0.17);
+
+  // -- torso ---------------------------------------------------------------
   ctx.fillStyle = palette.gear;
-  roundRect(ctx, -S * 0.66, -S * 0.36, S * 0.28, S * 0.72, S * 0.09);
-  ctx.fill();
-  // Torso shell.
+  roundRect(ctx, -S * 0.52, torsoTop + S * 0.1, S * 0.26, S * 0.56, S * 0.08);
+  ctx.fill(); // backpack
   ctx.fillStyle = palette.armor;
-  roundRect(ctx, -S * 0.48, -S * 0.54, S * 1.08, S * 1.08, S * 0.32);
+  roundRect(ctx, -S * TORSO_W / 2, torsoTop, S * TORSO_W, S * TORSO_H, S * 0.2);
   ctx.fill();
   ctx.strokeStyle = palette.armorDark;
-  ctx.lineWidth = 1.8;
-  roundRect(ctx, -S * 0.48, -S * 0.54, S * 1.08, S * 1.08, S * 0.32);
+  ctx.lineWidth = 1.6;
+  roundRect(ctx, -S * TORSO_W / 2, torsoTop, S * TORSO_W, S * TORSO_H, S * 0.2);
   ctx.stroke();
-  // Chest plate.
   ctx.fillStyle = palette.armorLight;
-  roundRect(ctx, S * 0.06, -S * 0.32, S * 0.46, S * 0.64, S * 0.11);
-  ctx.fill();
-  ctx.strokeStyle = palette.armorDark;
-  ctx.lineWidth = 1;
-  roundRect(ctx, S * 0.06, -S * 0.32, S * 0.46, S * 0.64, S * 0.11);
-  ctx.stroke();
-  // Shoulder pads.
-  ctx.fillStyle = palette.armorDark;
-  roundRect(ctx, -S * 0.2, -S * 0.76, S * 0.48, S * 0.27, S * 0.11);
-  ctx.fill();
-  roundRect(ctx, -S * 0.2, S * 0.49, S * 0.48, S * 0.27, S * 0.11);
-  ctx.fill();
-  ctx.restore();
-
-  // --- arms (two-handed grip on the foregrip + trigger) --------------------
-  ctx.strokeStyle = palette.armorDark;
-  capsule(ctx, FX(S * 0.04, -S * 0.6), FY(S * 0.04, -S * 0.6), FX(S * 0.84, -S * 0.14), FY(S * 0.84, -S * 0.14), S * 0.2);
-  ctx.strokeStyle = palette.armor;
-  capsule(ctx, FX(S * 0.04, S * 0.6), FY(S * 0.04, S * 0.6), FX(S * 0.44, S * 0.13), FY(S * 0.44, S * 0.13), S * 0.2);
-  // Gloves.
+  roundRect(ctx, S * 0.02, torsoTop + S * 0.13, S * 0.32, S * 0.5, S * 0.1);
+  ctx.fill(); // chest plate
   ctx.fillStyle = palette.gear;
-  ctx.beginPath();
-  ctx.arc(FX(S * 0.84, -S * 0.14), FY(S * 0.84, -S * 0.14), S * 0.12, 0, Math.PI * 2);
-  ctx.arc(FX(S * 0.44, S * 0.13), FY(S * 0.44, S * 0.13), S * 0.12, 0, Math.PI * 2);
-  ctx.fill();
+  roundRect(ctx, -S * TORSO_W / 2, torsoTop + S * TORSO_H - S * 0.14, S * TORSO_W, S * 0.14, S * 0.05);
+  ctx.fill(); // belt
 
-  // --- helmet + visor ------------------------------------------------------
-  const hx = FX(S * 0.12, 0);
-  const hy = FY(S * 0.12, 0);
+  // -- near leg -------------------------------------------------------------
+  drawLeg(1, false);
+
+  // -- head -----------------------------------------------------------------
+  ctx.fillStyle = palette.gear;
+  ctx.fillRect(-S * 0.07, torsoTop - S * 0.1, S * 0.14, S * 0.14); // neck
   ctx.fillStyle = palette.helmet;
   ctx.beginPath();
-  ctx.arc(hx, hy, S * 0.36, 0, Math.PI * 2);
+  ctx.arc(S * 0.03, headCy, S * HEAD_R, 0, Math.PI * 2);
   ctx.fill();
   ctx.strokeStyle = palette.armorLight;
   ctx.lineWidth = 1.4;
   ctx.beginPath();
-  ctx.arc(hx, hy, S * 0.36, ang + Math.PI * 0.62, ang + Math.PI * 1.38);
-  ctx.stroke();
-  // Visor bar, facing forward.
-  ctx.save();
-  ctx.translate(FX(S * 0.17, 0), FY(S * 0.17, 0));
-  ctx.rotate(ang);
+  ctx.arc(S * 0.03, headCy, S * HEAD_R * 0.86, -2.5, -0.9);
+  ctx.stroke(); // rim light
   ctx.fillStyle = palette.visor;
-  roundRect(ctx, 0, -S * 0.16, S * 0.17, S * 0.32, S * 0.06);
+  roundRect(ctx, S * 0.14, headCy - S * 0.1, S * 0.17, S * 0.2, S * 0.05);
+  ctx.fill(); // visor
+
+  // -- rifle (held in front, tracks the aim) --------------------------------
+  ctx.save();
+  ctx.translate(shoulderX, shoulderY);
+  ctx.rotate(ga);
+  ctx.fillStyle = palette.gunDark;
+  roundRect(ctx, -S * 0.34, -S * 0.05, S * 0.36, S * 0.12, S * 0.04);
+  ctx.fill(); // stock
+  ctx.fillStyle = palette.gun;
+  roundRect(ctx, 0, -S * 0.06, S * 0.5, S * 0.14, S * 0.04);
+  ctx.fill(); // receiver
+  ctx.fillStyle = palette.armor;
+  roundRect(ctx, S * 0.06, -S * 0.025, S * 0.26, S * 0.06, S * 0.025);
+  ctx.fill(); // energy cell
+  ctx.fillStyle = palette.gunDark;
+  roundRect(ctx, S * 0.5, -S * 0.035, S * 0.44, S * 0.08, S * 0.03);
+  ctx.fill(); // barrel
+  ctx.save();
+  ctx.translate(S * 0.2, S * 0.07);
+  ctx.rotate(0.3);
+  ctx.fillStyle = palette.gunDark;
+  roundRect(ctx, 0, 0, S * 0.1, S * 0.24, S * 0.035);
   ctx.fill();
+  ctx.restore(); // magazine
+  roundRect(ctx, S * 0.56, -S * 0.13, S * 0.09, S * 0.09, S * 0.02);
+  ctx.fill(); // sight
+  ctx.restore();
+
+  // -- front arm + gloves (over the rifle) -----------------------------------
+  ctx.strokeStyle = palette.armor;
+  capsule(ctx, S * 0.02, shoulderY + S * 0.1, gripX, gripY, S * 0.17);
+  ctx.fillStyle = palette.gear;
+  ctx.beginPath();
+  ctx.arc(gripX, gripY, S * 0.1, 0, Math.PI * 2);
+  ctx.arc(foreX, foreY, S * 0.1, 0, Math.PI * 2);
+  ctx.fill();
+
   ctx.restore();
 }
 

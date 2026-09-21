@@ -1,25 +1,69 @@
-/// VOIDSTRIKE — procedural soldier characters (Flame / Canvas port of the
-/// web client rig). Top-down operatives: boots, armor torso, shoulder plates,
-/// helmet + visor, and a two-handed rifle with an additive muzzle flash.
+/// VOIDSTRIKE — procedural side-view soldiers (Flame / Canvas port of the
+/// web 2.5D rig). The sim is top-down; this painter projects the floor with
+/// a fixed camera pitch and draws every operative as an upright soldier:
+/// articulated legs with a walk cycle, armored torso, backpack, helmeted
+/// head with visor, and a two-handed rifle that tracks the aim vector.
 ///
-/// Pure drawing code — all animation state (facing, gait, shot snap) is owned
-/// by the game loop and passed in as parameters.
+/// Pure drawing code — all animation state (gait, stride, facing side,
+/// backpedal) is owned by the game loop and passed in as parameters.
 library;
 
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+/// Camera pitch — floor y is squashed by this factor on screen.
+const double kTilt = 0.58;
+
 /// Soldiers are drawn well above their sim collision radius so the rig
-/// (rifle, shoulder plates, boots) reads at arena scale.
+/// (rifle, torso, legs) reads at arena scale.
 const double kVisualScale = 2.6;
 
-/// Where the visual barrel tip sits, in world units from the fighter origin.
-double visualMuzzle(double radius) => radius * kVisualScale * 1.12;
+/// Floor-space y → projected screen-space y.
+double groundY(double worldY) => worldY * kTilt;
+
+// Rig proportions (fractions of S = radius * kVisualScale).
+const double _legL = 0.92;
+const double _torsoH = 0.88;
+const double _torsoW = 0.74;
+const double _headR = 0.30;
+/// Height of the rifle shoulder line above the ground anchor (× S).
+const double _shoulderLift = _legL + _torsoH - 0.2;
+/// Chest line used to float tracers above the floor (× S).
+const double _chestLift = _legL + _torsoH * 0.55;
+
+/// Visual muzzle pitch clamp (radians from horizontal).
+const double _maxPitch = 1.05;
+
+/// Chest line height above the floor anchor, in world units.
+double soldierChestLift(double radius) => radius * kVisualScale * _chestLift;
 
 /// Distance from the sim projectile spawn point (radius + 6) to the visual
 /// barrel tip — used to anchor muzzle flashes onto the gun.
 double muzzleExtension(double radius) =>
-    math.max(0.0, visualMuzzle(radius) - (radius + 6));
+    math.max(0.0, radius * kVisualScale * 1.06 - (radius + 6));
+
+double _clampPitch(double aimX, double aimY) {
+  final p = math.atan2(-aimY * kTilt, aimX.abs() + 1e-5);
+  return p.clamp(-_maxPitch, _maxPitch);
+}
+
+/// Gun-muzzle tip in projected space (used to anchor muzzle flashes).
+ui.Offset muzzleTip({
+  required double x,
+  required double y,
+  required double radius,
+  required double aimX,
+  required double aimY,
+}) {
+  final s = radius * kVisualScale;
+  final dir = aimX >= 0 ? 1 : -1;
+  final pitch = _clampPitch(aimX, aimY);
+  final gl = s * 0.98;
+  return ui.Offset(
+    x + dir * math.cos(pitch) * gl,
+    groundY(y) - s * _shoulderLift - math.sin(pitch) * gl,
+  );
+}
 
 class SoldierPalette {
   const SoldierPalette({
@@ -103,162 +147,173 @@ void _capsule(
   );
 }
 
-/// Draw one operative. [faceAngle] is the smoothed body/facing angle,
-/// [moveAngle] the travel heading, [gaitPhase] the leg cycle phase,
-/// [stride] a 0..1 blend of stride amplitude.
+/// Draw one upright side-view operative. [x]/[y] are the sim floor position;
+/// the painter projects y itself. [side] is +1 (faces right) or -1 (faces
+/// left); [gaitPhase] the leg cycle phase; [stride] a 0..1 amplitude blend;
+/// [backPedal] inverts the cycle when walking away from the facing side.
 void paintSoldier(
   ui.Canvas canvas, {
   required double x,
   required double y,
   required double radius,
-  required double faceAngle,
-  required double moveAngle,
+  required int side,
+  required double aimX,
+  required double aimY,
   required double gaitPhase,
   required double stride,
+  required bool backPedal,
   required SoldierPalette palette,
+  bool dashReady = false,
 }) {
-  final S = radius * kVisualScale;
-  final c = math.cos(faceAngle);
-  final s = math.sin(faceAngle);
-  final gunFill = ui.Paint()..color = palette.gun;
-  final gunDarkFill = ui.Paint()..color = palette.gunDark;
-  final armorFill = ui.Paint()..color = palette.armor;
-  final armorDarkFill = ui.Paint()..color = palette.armorDark;
-  final armorLightFill = ui.Paint()..color = palette.armorLight;
-  final gearFill = ui.Paint()..color = palette.gear;
-  final armorOutline = ui.Paint()
-    ..color = palette.armorDark
-    ..style = ui.PaintingStyle.stroke
-    ..strokeWidth = 1.8;
+  final s = radius * kVisualScale;
+  final ax = x;
+  final ay = groundY(y);
 
-  // Team glow + shadow.
-  canvas.drawCircle(
-    ui.Offset(x, y),
-    S * 1.42,
-    ui.Paint()..color = palette.armor.withValues(alpha: 0.10),
-  );
-  canvas.save();
-  canvas.translate(x + 2, y + 3);
-  canvas.rotate(faceAngle);
+  // Team glow + contact shadow (symmetric, under everything).
   canvas.drawOval(
     ui.Rect.fromCenter(
-        center: ui.Offset.zero, width: S * 1.84, height: S * 1.1),
-    ui.Paint()..color = const ui.Color(0x66000000),
+      center: ui.Offset(ax, ay - s * 0.1),
+      width: s * 2.3,
+      height: s * 1.0,
+    ),
+    ui.Paint()
+      ..color = palette.armor
+          .withValues(alpha: dashReady ? 0.10 : 0.07),
   );
-  canvas.restore();
+  canvas.drawOval(
+    ui.Rect.fromCenter(
+      center: ui.Offset(ax, ay + s * 0.04),
+      width: s * 1.24,
+      height: s * 0.4,
+    ),
+    ui.Paint()..color = const ui.Color(0x73000000),
+  );
 
-  // Boots — walk cycle along the movement heading.
-  final mc = math.cos(moveAngle);
-  final ms = math.sin(moveAngle);
-  final legGap = S * 0.3;
-  final legLen = S * 0.4;
-  for (var i = 0; i < 2; i++) {
-    final wob = (i == 0 ? math.sin(gaitPhase) : -math.sin(gaitPhase)) *
-        S *
-        0.26 *
-        stride;
-    final bx = x + mc * wob - ms * (i == 0 ? legGap : -legGap);
-    final by = y + ms * wob + mc * (i == 0 ? -legGap : legGap);
-    _capsule(
+  final phase = backPedal ? -gaitPhase : gaitPhase;
+  final swing = s * 0.42 * stride;
+  final bob = math.sin(phase).abs() * s * 0.05 * stride;
+  final hipY = -s * _legL + bob;
+  final torsoTop = hipY - s * _torsoH;
+  final headCy = torsoTop - s * _headR * 0.95;
+  final shoulderX = s * 0.1;
+  final shoulderY = torsoTop + s * 0.24;
+
+  final pitch = _clampPitch(aimX, aimY);
+  final ga = -pitch; // local frame: +y is down
+  final gc = math.cos(ga);
+  final gs = math.sin(ga);
+  final gripX = shoulderX + gc * s * 0.16;
+  final gripY = shoulderY + gs * s * 0.16 + s * 0.05;
+  final foreX = shoulderX + gc * s * 0.42;
+  final foreY = shoulderY + gs * s * 0.42;
+
+  canvas.save();
+  canvas.translate(ax, ay);
+  canvas.scale(side.toDouble(), 1.0);
+
+  // ---- far leg (shaded) ----------------------------------------------------
+  void drawLeg(int i, bool far) {
+    final p = phase + (i == 0 ? 0.0 : math.pi);
+    final footX = math.sin(p) * swing;
+    final footY = -math.max(0.0, math.cos(p)) * s * 0.18;
+    final hipX = i == 0 ? -s * 0.06 : s * 0.06;
+    final kneeX = (hipX + footX) / 2 + s * 0.12;
+    final kneeY = (hipY + footY) / 2;
+    _capsule(canvas, hipX, hipY, kneeX, kneeY, s * 0.2,
+        far ? palette.armorDark : palette.gear);
+    _capsule(canvas, kneeX, kneeY, footX, footY, s * 0.15,
+        far ? palette.armorDark : palette.gear);
+    _rrect(
       canvas,
-      bx - mc * legLen * 0.3,
-      by - ms * legLen * 0.3,
-      bx + mc * legLen * 0.36,
-      by + ms * legLen * 0.36,
-      S * 0.24,
-      palette.gear,
+      footX - s * 0.1,
+      footY - s * 0.07,
+      s * 0.3,
+      s * 0.14,
+      s * 0.06,
+      ui.Paint()..color = far ? palette.gunDark : palette.gear,
     );
   }
 
-  // Rifle — under the arms, over the boots.
-  canvas.save();
-  canvas.translate(x, y);
-  canvas.rotate(faceAngle);
-  _rrect(canvas, -S * 0.24, -S * 0.085, S * 0.42, S * 0.17, S * 0.055,
-      gunDarkFill); // stock
-  _rrect(canvas, S * 0.16, -S * 0.105, S * 0.56, S * 0.21, S * 0.055,
-      gunFill); // receiver
-  _rrect(canvas, S * 0.24, -S * 0.045, S * 0.3, S * 0.09, S * 0.03,
-      armorFill); // energy cell
-  _rrect(canvas, S * 0.7, -S * 0.055, S * 0.44, S * 0.11, S * 0.03,
-      gunDarkFill); // barrel
-  canvas.save();
-  canvas.translate(S * 0.4, S * 0.11);
-  canvas.rotate(0.34);
-  _rrect(canvas, 0, 0, S * 0.12, S * 0.28, S * 0.04, gunDarkFill); // magazine
-  canvas.restore();
-  _rrect(canvas, S * 0.94, -S * 0.14, S * 0.1, S * 0.1, S * 0.02,
-      gunDarkFill); // sight
-  canvas.restore();
+  drawLeg(0, true);
 
-  // Torso.
-  canvas.save();
-  canvas.translate(x, y);
-  canvas.rotate(faceAngle);
-  _rrect(canvas, -S * 0.66, -S * 0.36, S * 0.28, S * 0.72, S * 0.09,
-      gearFill); // backpack
-  _rrect(canvas, -S * 0.48, -S * 0.54, S * 1.08, S * 1.08, S * 0.32, armorFill);
-  _rrect(
-      canvas, -S * 0.48, -S * 0.54, S * 1.08, S * 1.08, S * 0.32, armorOutline);
-  _rrect(canvas, S * 0.06, -S * 0.32, S * 0.46, S * 0.64, S * 0.11,
-      armorLightFill); // chest plate
-  _rrect(canvas, -S * 0.2, -S * 0.76, S * 0.48, S * 0.27, S * 0.11,
-      armorDarkFill); // pads
-  _rrect(canvas, -S * 0.2, S * 0.49, S * 0.48, S * 0.27, S * 0.11,
-      armorDarkFill);
-  canvas.restore();
+  // ---- rear arm (behind torso) ---------------------------------------------
+  _capsule(canvas, -s * 0.08, shoulderY + s * 0.06, foreX, foreY, s * 0.17,
+      palette.armorDark);
 
-  // Arms — two-handed grip on the rifle.
-  double fxx(double l, double p) => x + c * l - s * p;
-  double fyy(double l, double p) => y + s * l + c * p;
-  _capsule(
-    canvas,
-    fxx(S * 0.04, -S * 0.6),
-    fyy(S * 0.04, -S * 0.6),
-    fxx(S * 0.84, -S * 0.14),
-    fyy(S * 0.84, -S * 0.14),
-    S * 0.2,
-    palette.armorDark,
+  // ---- torso ---------------------------------------------------------------
+  _rrect(canvas, -s * 0.52, torsoTop + s * 0.1, s * 0.26, s * 0.56, s * 0.08,
+      ui.Paint()..color = palette.gear); // backpack
+  _rrect(canvas, -s * _torsoW / 2, torsoTop, s * _torsoW, s * _torsoH, s * 0.2,
+      ui.Paint()..color = palette.armor);
+  _rrect(canvas, -s * _torsoW / 2, torsoTop, s * _torsoW, s * _torsoH, s * 0.2,
+      ui.Paint()
+        ..color = palette.armorDark
+        ..style = ui.PaintingStyle.stroke
+        ..strokeWidth = 1.6);
+  _rrect(canvas, s * 0.02, torsoTop + s * 0.13, s * 0.32, s * 0.5, s * 0.1,
+      ui.Paint()..color = palette.armorLight); // chest plate
+  _rrect(canvas, -s * _torsoW / 2, torsoTop + s * _torsoH - s * 0.14,
+      s * _torsoW, s * 0.14, s * 0.05, ui.Paint()..color = palette.gear); // belt
+
+  // ---- near leg ------------------------------------------------------------
+  drawLeg(1, false);
+
+  // ---- head ----------------------------------------------------------------
+  canvas.drawRect(
+    ui.Rect.fromLTWH(-s * 0.07, torsoTop - s * 0.1, s * 0.14, s * 0.14),
+    ui.Paint()..color = palette.gear,
+  ); // neck
+  canvas.drawCircle(
+    ui.Offset(s * 0.03, headCy),
+    s * _headR,
+    ui.Paint()..color = palette.helmet,
   );
-  _capsule(
-    canvas,
-    fxx(S * 0.04, S * 0.6),
-    fyy(S * 0.04, S * 0.6),
-    fxx(S * 0.44, S * 0.13),
-    fyy(S * 0.44, S * 0.13),
-    S * 0.2,
-    palette.armor,
-  );
-  canvas.drawCircle(ui.Offset(fxx(S * 0.84, -S * 0.14), fyy(S * 0.84, -S * 0.14)),
-      S * 0.12, gearFill);
-  canvas.drawCircle(ui.Offset(fxx(S * 0.44, S * 0.13), fyy(S * 0.44, S * 0.13)),
-      S * 0.12, gearFill);
-
-  // Helmet + rim light.
-  final hx = fxx(S * 0.12, 0);
-  final hy = fyy(S * 0.12, 0);
-  canvas.drawCircle(ui.Offset(hx, hy), S * 0.36, ui.Paint()..color = palette.helmet);
   canvas.drawArc(
     ui.Rect.fromCenter(
-      center: ui.Offset(hx, hy),
-      width: S * 0.72,
-      height: S * 0.72,
+      center: ui.Offset(s * 0.03, headCy),
+      width: s * _headR * 1.72,
+      height: s * _headR * 1.72,
     ),
-    faceAngle + math.pi * 0.62,
-    math.pi * 0.76,
+    -2.5,
+    1.6,
     false,
     ui.Paint()
       ..color = palette.armorLight
       ..style = ui.PaintingStyle.stroke
       ..strokeWidth = 1.4,
-  );
+  ); // rim light
+  _rrect(canvas, s * 0.14, headCy - s * 0.1, s * 0.17, s * 0.2, s * 0.05,
+      ui.Paint()..color = palette.visor); // visor
 
-  // Visor bar.
+  // ---- rifle (held in front, tracks the aim) --------------------------------
   canvas.save();
-  canvas.translate(fxx(S * 0.17, 0), fyy(S * 0.17, 0));
-  canvas.rotate(faceAngle);
-  _rrect(canvas, 0, -S * 0.16, S * 0.17, S * 0.32, S * 0.06,
-      ui.Paint()..color = palette.visor);
+  canvas.translate(shoulderX, shoulderY);
+  canvas.rotate(ga);
+  final gunFill = ui.Paint()..color = palette.gun;
+  final gunDarkFill = ui.Paint()..color = palette.gunDark;
+  _rrect(canvas, -s * 0.34, -s * 0.05, s * 0.36, s * 0.12, s * 0.04,
+      gunDarkFill); // stock
+  _rrect(canvas, 0, -s * 0.06, s * 0.5, s * 0.14, s * 0.04, gunFill); // receiver
+  _rrect(canvas, s * 0.06, -s * 0.025, s * 0.26, s * 0.06, s * 0.025,
+      ui.Paint()..color = palette.armor); // energy cell
+  _rrect(canvas, s * 0.5, -s * 0.035, s * 0.44, s * 0.08, s * 0.03,
+      gunDarkFill); // barrel
+  canvas.save();
+  canvas.translate(s * 0.2, s * 0.07);
+  canvas.rotate(0.3);
+  _rrect(canvas, 0, 0, s * 0.1, s * 0.24, s * 0.035, gunDarkFill); // magazine
+  canvas.restore();
+  _rrect(canvas, s * 0.56, -s * 0.13, s * 0.09, s * 0.09, s * 0.02,
+      gunDarkFill); // sight
+  canvas.restore();
+
+  // ---- front arm + gloves (over the rifle) -----------------------------------
+  _capsule(canvas, s * 0.02, shoulderY + s * 0.1, gripX, gripY, s * 0.17,
+      palette.armor);
+  final gloves = ui.Paint()..color = palette.gear;
+  canvas.drawCircle(ui.Offset(gripX, gripY), s * 0.1, gloves);
+  canvas.drawCircle(ui.Offset(foreX, foreY), s * 0.1, gloves);
+
   canvas.restore();
 }
 
@@ -298,19 +353,4 @@ void paintMuzzleFlash(
   fill.color = hot.withValues(alpha: math.min(1.0, intensity * 1.4));
   canvas.drawCircle(ui.Offset(1, 0), 3 + 2.6 * intensity, fill);
   canvas.restore();
-}
-
-/// Shortest-arc angular approach toward (tx, ty). Mutates and returns [cur].
-double steerAngle(double cur, double tx, double ty, double dt, double k) {
-  final tl = math.sqrt(tx * tx + ty * ty);
-  if (tl < 1e-5) return cur;
-  var target = math.atan2(ty / tl, tx / tl);
-  var d = target - cur;
-  while (d > math.pi) {
-    d -= math.pi * 2;
-  }
-  while (d < -math.pi) {
-    d += math.pi * 2;
-  }
-  return cur + d * (1 - math.exp(-k * dt));
 }
