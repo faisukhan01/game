@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'game/protocol.dart' show VsColors;
+import 'game/voidstrike_game.dart' show MatchResult;
 import 'widgets/match_screen.dart';
 
 void main() {

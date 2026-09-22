@@ -150,7 +150,6 @@ class VoidstrikeGame extends FlameGame {
     camera.viewport = FixedResolutionViewport(
       resolution: Vector2(kViewW, kViewH),
     );
-    camera.viewfinder.anchor = Anchor.topLeft;
     player = Fighter(0, 800, 300, VsPlayer.radius)
       ..maxHp = VsPlayer.maxHp
       ..hp = VsPlayer.maxHp
@@ -184,6 +183,9 @@ class VoidstrikeGame extends FlameGame {
     final k = 1 - math.exp(-6 * dt);
     camX += (tx - camX) * k;
     camY += (ty - camY) * k;
+    // Viewfinder sits at the center of the visible world rect (anchor=center
+    // is the default), so [camX..camX+kViewW] fills the letterboxed viewport.
+    camera.viewfinder.position = Vector2(camX + kViewW / 2, camY + kViewH / 2);
   }
 
   /// Manual aim markers (stick deflection / mouse hover) suspend aim assist.

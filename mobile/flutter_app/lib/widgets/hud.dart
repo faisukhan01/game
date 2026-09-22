@@ -230,7 +230,7 @@ class _HudOverlayState extends State<HudOverlay> {
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       Text(
-                        '${_score.toString().padStart(7, '0')}',
+                        '${_score.toString().padLeft(7, '0')}',
                         style: const TextStyle(
                           fontFamily: 'monospace',
                           fontSize: 20,
@@ -239,7 +239,7 @@ class _HudOverlayState extends State<HudOverlay> {
                         ),
                       ),
                       Text(
-                        'WAVE ${_wave.toString().padStart(2, '0')} · $_kills KILLS',
+                        'WAVE ${_wave.toString().padLeft(2, '0')} · $_kills KILLS',
                         style: const TextStyle(
                           fontFamily: 'monospace',
                           fontSize: 10,

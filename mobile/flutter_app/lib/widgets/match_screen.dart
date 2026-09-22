@@ -9,7 +9,7 @@ import 'protocol_shim.dart';
 /// Match screen: side-view game canvas with a follow camera + twin-stick
 /// touch controls (left = move, right = aim) + FIRE / DASH / NOVA buttons.
 class MatchScreen extends StatelessWidget {
-  MatchScreen({super.key, required this.callsign, required this.onResult});
+  const MatchScreen({super.key, required this.callsign, required this.onResult});
 
   final String callsign;
   final ValueChanged<MatchResult> onResult;
