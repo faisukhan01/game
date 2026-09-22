@@ -273,9 +273,9 @@ export function Arena() {
   return (
     <div className="fixed inset-0 z-40 flex flex-col bg-void">
       {/* top status strip */}
-      <div className="flex items-center justify-between border-b border-line bg-void/90 px-3 py-2 font-mono text-[10px] tracking-[0.24em] text-mute md:px-5">
-        <span className="text-volt">ONSLAUGHT // OFFLINE SIM</span>
-        <span ref={(el) => { hudRef.current.wave = el; }} className="text-ink">WAVE 01</span>
+      <div className="flex items-center justify-between gap-2 overflow-hidden border-b border-line bg-void/90 px-3 py-2 font-mono text-[10px] tracking-[0.24em] text-mute md:px-5">
+        <span className="hidden shrink-0 text-volt sm:inline">ONSLAUGHT // OFFLINE SIM</span>
+        <span ref={(el) => { hudRef.current.wave = el; }} className="shrink-0 text-ink">WAVE 01</span>
         <button
           type="button"
           onClick={() => setPaused(true)}
