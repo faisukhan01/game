@@ -230,7 +230,7 @@ class _HudOverlayState extends State<HudOverlay> {
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       Text(
-                        '${_score.toString().padLeft(7, '0')}',
+                        _score.toString().padLeft(7, '0'),
                         style: const TextStyle(
                           fontFamily: 'monospace',
                           fontSize: 20,
