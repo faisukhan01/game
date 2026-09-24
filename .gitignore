@@ -1,2 +1,107 @@
-skills/
+# ============ VOIDSTRIKE monorepo .gitignore ============
+
+# --- Node / Next.js (apps/web at repo root) ---
 node_modules/
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+.eslintcache
+
+# --- Sandbox / local runtime (not part of the product) ---
+dev.log
+server.log
+worklog.md
+agent-ctx/
+download/
+tests/
+examples/
+Caddyfile
+db/*.db
+db/*.db-journal
+.env
+.env.*
+!.env.example
+
+# --- C / C++ ---
+*.o
+*.a
+*.so
+*.d
+core/c/build/
+clients/unreal/Binaries/
+clients/unreal/Intermediate/
+clients/unreal/DerivedDataCache/
+clients/unreal/Saved/
+
+# --- .NET ---
+bin/
+obj/
+*.user
+TestResults/
+
+# --- Go ---
+services/gameserver/gameserver
+services/gameserver/bin/
+*.test
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Java / Kotlin / Android ---
+target/
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
+*.hprof
+mobile/android_companion/app/debug/
+mobile/android_companion/app/release/
+
+# --- Flutter / Dart ---
+mobile/flutter_app/.dart_tool/
+mobile/flutter_app/.flutter-plugins
+mobile/flutter_app/.flutter-plugins-dependencies
+mobile/flutter_app/.packages
+mobile/flutter_app/build/
+mobile/flutter_app/ios/Pods/
+mobile/flutter_app/android/.gradle/
+.pub-cache/
+
+# --- Unity ---
+clients/unity/Library/
+clients/unity/Temp/
+clients/unity/Obj/
+clients/unity/Logs/
+clients/unity/UserSettings/
+clients/unity/[Ll]ibrary/
+clients/unity/[Tt]emp/
+clients/unity/[Oo]bj/
+clients/unity/[Bb]uild/
+clients/unity/[Ll]ogs/
+clients/unity/[Uu]serSettings/
+clients/unity/MemoryCaptures/
+clients/unity/*.csproj
+clients/unity/*.sln
+clients/unity/*.userprefs
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# --- Secrets ---
+*.pem
+*.key
+*.p12
