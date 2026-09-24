@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'game/protocol.dart' show VsColors;
 import 'game/voidstrike_game.dart';
-import 'widgets/hud.dart';
+import 'widgets/match_screen.dart';
 
 void main() {
   runApp(const ProviderScope(child: VoidstrikeApp()));

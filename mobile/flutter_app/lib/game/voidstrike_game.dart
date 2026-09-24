@@ -6,7 +6,9 @@
 library;
 
 import 'dart:math' as math;
+import 'dart:ui' show Canvas, Color, Offset, Paint, PaintingStyle, Rect;
 
+import 'package:flame/camera.dart';
 import 'package:flame/components.dart';
 import 'package:flame/events.dart';
 import 'package:flame/game.dart';
@@ -87,7 +89,7 @@ class VoidstrikeGame extends FlameGame with TapCallbacks {
 
   int score = 0, kills = 0, wave = 1, combo = 1;
   double comboTimer = 0, spawnTimer = VsBot.spawnStagger, elapsed = 0;
-  int wavePending = VsBot.countFor(1), spawnIdx = 0;
+  int wavePending = VsBot.countFor(1), spawnIdx = 0, nextId = 0;
   bool matchOver = false;
 
   // input state (wired from widgets)
@@ -102,6 +104,30 @@ class VoidstrikeGame extends FlameGame with TapCallbacks {
     [700, 420, 200, 60],
     [1180, 710, 220, 40],
   ];
+
+  /// Wave spawn points — arena corners and mid edges (cycled).
+  static const List<List<double>> spawnPoints = [
+    [90, 90],
+    [1510, 90],
+    [90, 810],
+    [1510, 810],
+    [800, 70],
+    [800, 830],
+  ];
+
+  void _spawnBot() {
+    final sp = spawnPoints[spawnIdx % spawnPoints.length];
+    spawnIdx++;
+    final hp = VsBot.maxHp(wave);
+    final b = Fighter(++nextId, sp[0], sp[1], VsBot.radius)
+      ..maxHp = hp
+      ..hp = hp
+      ..speed = VsBot.speed(wave)
+      ..waveN = wave;
+    b.wpx = rng.nextDouble() * VsWorld.width;
+    b.wpy = rng.nextDouble() * VsWorld.height;
+    bots.add(b);
+  }
 
   @override
   Future<void> onLoad() async {
@@ -445,6 +471,7 @@ class VoidstrikeGame extends FlameGame with TapCallbacks {
   // ---- rendering ----
   @override
   void render(Canvas canvas) {
+    super.render(canvas);
     canvas.drawRect(
       const Rect.fromLTWH(0, 0, VsWorld.width, VsWorld.height),
       Paint()..color = const Color(VsColors.void_),
