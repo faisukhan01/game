@@ -46,7 +46,7 @@ jobs:
         env:
           DATABASE_URL: "file:./db/release.db"
       - name: Deploy web (placeholder — wire your edge target)
-        run: echo "TODO: deploy .next/standalone to your edge/VM target"
+        run: 'echo "TODO: deploy .next/standalone to your edge/VM target"'
 
   apk-tag:
     # Versioned mobile APK for v* tags (rolling builds live in android-apk.yml).
