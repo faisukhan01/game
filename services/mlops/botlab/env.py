@@ -1,259 +1,202 @@
-"""Gym-style RL environment wrapping the Protocol v1 world (``botlab.rules``).
+"""Gym-style environment wrapping the Protocol v1 sim for RL training.
 
-One :meth:`VoidstrikeEnv.step` == one 60 Hz simulation tick.
-
-Action space — ``Discrete(27)`` = 3x3 move x 3 fire x 3 special:
-
-* ``move  = action % 9``            -> index into :data:`MOVES` (index 0 == stay)
-* ``fire  = (action // 9) % 3``     -> 0 none, 1 aim-nearest-bot, 2 aim-move-dir
-* ``special = action // 18``        -> 0 none, 1 dash, 2 nova
-
-Fire dirs are continuous (unit vector toward the nearest bot, or the current move
-dir / facing); only the *move* component is quantized to the 9-dir grid. The dash
-direction is the current move dir (falling back to the player's facing).
-
-Observation — 24-dim ``float32``, player-centric (see :meth:`VoidstrikeEnv._observation`
-for the exact layout; all components are normalized, angle-preserving).
-
-Reward (per tick): ``+1.0`` kill, ``+0.01`` per point of damage dealt,
-``-0.02`` per point of damage taken, ``+0.001`` survive-per-tick, ``+0.5`` wave
-clear, ``-1.0`` death. ``done`` is ``True`` on player death (terminated) or when
-``max_steps`` is reached (truncated; ``info["truncated"]`` distinguishes them and
-no death penalty is applied on truncation).
+Observation: 24-dim float32, player-centric.
+Action space: Discrete(27) = 3 move × 3 fire × 3 special.
+Reward: kill +1.0 · damage dealt +0.01 · damage taken −0.02 ·
+        survival +0.001/t · wave clear +0.5 · death −1.0.
 """
 
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
+import math
+from typing import Any
 
 import numpy as np
 
-from .rules import (
-    BOT_RADIUS,
-    COMBO_MAX,
-    PLAYER_MAX_HP,
-    PLAYER_SPEED,
-    PLAYER_DASH_IMPULSE,
-    NOVA_ENERGY_COST,
-    RIFLE_ENERGY_COST,
-    RawInput,
-    World,
-    normalize,
-)
+from .rules import DT, World
 
-__all__ = ["VoidstrikeEnv", "MOVES", "OBS_DIM", "NUM_ACTIONS"]
+OBS_DIM = 24
+N_ACTIONS = 27
 
-OBS_DIM: int = 24
-NUM_ACTIONS: int = 27
-
-#: 9 movement options (3x3 grid, index 0 == stay). Order: stay, cardinal, diagonal.
-MOVES: Tuple[Tuple[float, float], ...] = (
-    (0.0, 0.0),
-    (-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0),
-    (-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0),
-)
-
-# Reward constants (spec: task 2-b).
-REWARD_KILL: float = 1.0
-REWARD_DAMAGE_DEALT: float = 0.01
-REWARD_DAMAGE_TAKEN: float = -0.02
-REWARD_SURVIVE_PER_TICK: float = 0.001
-REWARD_WAVE_CLEAR: float = 0.5
-REWARD_DEATH: float = -1.0
-
-_VEL_NORM: float = float(PLAYER_DASH_IMPULSE)  # 720; keeps dash velocities ~O(1)
-_POS_NORM_X: float = 1600.0
-_POS_NORM_Y: float = 900.0
-_REL_NORM: float = 1600.0                      # angle-preserving relative positions
-_WAVE_NORM: float = 12.0
-
-
-def _clip1(v: float) -> float:
-    if v < -1.0:
-        return -1.0
-    if v > 1.0:
-        return 1.0
-    return v
+MOVE_DIRS = [(0.0, 0.0), (1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0),
+             (0.7071067811865476, 0.7071067811865476), (-0.7071067811865476, 0.7071067811865476),
+             (0.7071067811865476, -0.7071067811865476), (-0.7071067811865476, -0.7071067811865476)]
+# 9 move dirs compressed to 3 buckets for the discrete space: stay / toward-nearest / away
+FIRE_MODES = 3  # none / aim-nearest / aim-move-dir
+SPECIALS = 3    # none / dash / nova
 
 
 class VoidstrikeEnv:
-    """Deterministic single-player wave-survival environment (Protocol v1)."""
+    """Deterministic single-player Onslaught environment."""
 
-    obs_dim: int = OBS_DIM
-    n_actions: int = NUM_ACTIONS
+    metadata = {"render_modes": []}
 
-    def __init__(self, max_steps: Optional[int] = None) -> None:
-        """
-        Args:
-            max_steps: episode length cap in ticks; ``None`` means run until death.
-                Reaching the cap sets ``done=True`` with ``info["truncated"]=True``.
-        """
-        self.max_steps = max_steps
-        self.world: Optional[World] = None
-        self._steps: int = 0
+    def __init__(self, seed: int = 1337, max_ticks: int = 3600) -> None:
+        self.seed = seed
+        self.max_ticks = max_ticks
+        self.world: World | None = None
+        self._tick_count = 0
+        self._last_hp = 100.0
+        self._dealt = 0.0
+        self._taken = 0.0
 
-    # ------------------------------------------------------------------ API
+    # -- gym API --
+    def reset(self, seed: int | None = None) -> np.ndarray:
+        s = self.seed if seed is None else seed
+        self.world = World(s & 0xFFFFFFFFFFFFFFFF)
+        self._tick_count = 0
+        self._last_hp = self.world.units[0].hp
+        self._dealt = 0.0
+        self._taken = 0.0
+        return self._obs()
 
-    def reset(self, seed: int) -> np.ndarray:
-        """Reset the world with ``seed`` and return the initial observation."""
-        self.world = World(int(seed))
-        self._steps = 0
-        return self._observation()
-
-    def step(self, action: int) -> Tuple[np.ndarray, float, bool, dict]:
-        """Apply a discrete action (0..26) for one tick."""
+    def step(self, action: int) -> tuple[np.ndarray, float, bool, dict[str, Any]]:
         if self.world is None:
-            raise RuntimeError("reset() must be called before step()")
-        action = int(action)
-        if not 0 <= action < NUM_ACTIONS:
-            raise ValueError(f"action {action} outside [0, {NUM_ACTIONS - 1}]")
-        move_idx = action % 9
-        fire_idx = (action // 9) % 3
-        special_idx = action // 18
+            raise RuntimeError("call reset() before step()")
+        action = int(action) % N_ACTIONS
+        move_bucket = action // 9          # 0 stay, 1 toward, 2 away
+        fire_mode = (action // 3) % 3      # 0 none, 1 aim nearest, 2 aim move
+        special = action % 3               # 0 none, 1 dash, 2 nova
 
-        move = MOVES[move_idx]
-        fire: Optional[Tuple[float, float]] = None
-        if fire_idx == 1:
-            fire = self._nearest_bot_dir()
-        elif fire_idx == 2:
-            assert self.world is not None
-            if move[0] != 0.0 or move[1] != 0.0:
-                fire = normalize(move)  # already unit length
-            else:
-                fire = self.world.facing
-        dash = special_idx == 1
-        nova = special_idx == 2
-        return self.step_raw(move, fire, dash, nova)
+        w = self.world
+        p = w.units[w.player_idx]
 
-    def step_raw(
-        self,
-        move: Tuple[float, float],
-        fire: Optional[Tuple[float, float]] = None,
-        dash: bool = False,
-        nova: bool = False,
-    ) -> Tuple[np.ndarray, float, bool, dict]:
-        """Apply a continuous input frame for one tick (used by scripted policies)."""
-        world = self.world
-        if world is None:
-            raise RuntimeError("reset() must be called before step_raw()")
-        if world.done:
-            raise RuntimeError("episode has ended; call reset()")
-        world.tick(RawInput(move=move, fire=fire, dash=dash, nova=nova))
-        self._steps += 1
+        # nearest alive bot
+        near = None
+        nd = 1e18
+        for u in w.units[1:]:
+            if u.kind == 1 and u.alive:
+                d = (u.x - p.x) ** 2 + (u.y - p.y) ** 2
+                if d < nd:
+                    nd, near = d, u
 
+        mx, my = 0.0, 0.0
+        if move_bucket in (1, 2) and near is not None:
+            d = math.sqrt(nd) or 1.0
+            tx, ty = (near.x - p.x) / d, (near.y - p.y) / d
+            mx, my = (tx, ty) if move_bucket == 1 else (-tx, -ty)
+
+        ax, ay = 0.0, 0.0
+        fire = False
+        if fire_mode == 1 and near is not None:
+            d = math.sqrt(nd) or 1.0
+            ax, ay = (near.x - p.x) / d, (near.y - p.y) / d
+            fire = True
+        elif fire_mode == 2 and (mx or my):
+            l = math.sqrt(mx * mx + my * my)
+            ax, ay = mx / l, my / l
+            fire = True
+
+        inp = _InputLite(mx, my, ax, ay, fire, special == 1, special == 2)
+
+        prev_score = w.score
+        prev_hp = p.hp
+        prev_bot_hp = sum(u.hp for u in w.units[1:] if u.kind == 1 and u.alive)
+
+        w.tick(inp)
+        self._tick_count += 1
+
+        # reward shaping from events + deltas
         reward = 0.0
-        for ev in world.events:
-            kind = ev["kind"]
-            if kind == "hit":
-                reward += (REWARD_DAMAGE_DEALT if ev["from_player"] else REWARD_DAMAGE_TAKEN) * ev["damage"]
-            elif kind == "kill":
-                reward += REWARD_KILL
-            elif kind == "wave_cleared":
-                reward += REWARD_WAVE_CLEAR
-            elif kind == "match_end":
-                reward += REWARD_DEATH
-        terminated = world.done
-        truncated = False
-        if not terminated and self.max_steps is not None and self._steps >= self.max_steps:
-            truncated = True
-            world.done = True  # halt the sim; distinguishes from death via the flag below
-        if not terminated:
-            reward += REWARD_SURVIVE_PER_TICK
+        new_kills = sum(1 for e in w.events if e.kind == "kill")
+        reward += 1.0 * new_kills
+        reward += 0.001  # survival per tick
+        post_bot_hp = sum(u.hp for u in w.units[1:] if u.kind == 1 and u.alive)
+        dealt = max(0.0, prev_bot_hp - post_bot_hp)   # damage dealt to bots (kills count fully)
+        reward += 0.01 * dealt
+        taken = max(0.0, prev_hp - p.hp)
+        if taken > 0:
+            self._taken += taken
+            reward -= 0.02 * taken
+        done = bool(w.match_over) or self._tick_count >= self.max_ticks
+        if w.match_over:
+            reward -= 1.0
+        if any(e.kind == "wave" for e in w.events):
+            reward += 0.5
 
-        done = terminated or truncated
         info = {
-            "tick": world.tick,
-            "score": world.score,
-            "wave": world.wave,
-            "kills": world.kills,
-            "combo": world.combo,
-            "hp": world.player.hp,
-            "energy": world.energy,
-            "bots_alive": len(world.bots),
-            "checksum": world.checksum,
-            "events": list(world.events),
-            "terminated": terminated,
-            "truncated": truncated,
-            "steps": self._steps,
+            "score": w.score - prev_score,
+            "kills": new_kills,
+            "wave": w.wave,
+            "ticks": self._tick_count,
         }
-        return self._observation(), reward, done, info
+        return self._obs(), reward, done, info
 
-    # ------------------------------------------------------------ internals
-
-    def _nearest_bot_dir(self) -> Tuple[float, float]:
-        """Unit dir toward the nearest live bot; ``(1, 0)`` when none (scripted semantics)."""
-        assert self.world is not None
-        p = self.world.player
-        best: Optional[Tuple[float, float]] = None
-        best_d2 = float("inf")
-        for bot in self.world.bots:
-            if bot.hp <= 0.0:
-                continue
-            dx = bot.x - p.x
-            dy = bot.y - p.y
-            d2 = dx * dx + dy * dy
-            if d2 < best_d2:
-                best_d2 = d2
-                best = (dx, dy)
-        if best is None:
-            return (1.0, 0.0)
-        return normalize(best) or (1.0, 0.0)
-
-    def _observation(self) -> np.ndarray:
-        """Build the 24-dim player-centric observation.
-
-        Layout::
-
-            [0] x/1600                [1] y/900
-            [2] vx/720 (clip +-1)     [3] vy/720 (clip +-1)
-            [4] hp/100                [5] energy/100
-            [6..9]   bot 0: dx/1600, dy/1600, rvx/720 clip, rvy/720 clip
-            [10..13] bot 1: same      [14..17] bot 2: same   (nearest first, zeros if absent)
-            [18..21] nearest projectile: dx/1600, dy/1600, rvx/720 clip, rvy/720 clip
-            [22] combo/5              [23] min(wave,12)/12
-
-        Relative positions use a uniform 1600-unit scale so angles are preserved;
-        bot hp is intentionally excluded to fit the 24-dim budget (bot threat is
-        conveyed by position/velocity; wave difficulty by dim 23).
-        """
-        world = self.world
-        assert world is not None
-        p = world.player
+    def _obs(self) -> np.ndarray:
+        w = self.world
+        assert w is not None
+        p = w.units[w.player_idx]
         obs = np.zeros(OBS_DIM, dtype=np.float32)
-        obs[0] = p.x / _POS_NORM_X
-        obs[1] = p.y / _POS_NORM_Y
-        obs[2] = _clip1(p.vx / _VEL_NORM)
-        obs[3] = _clip1(p.vy / _VEL_NORM)
-        obs[4] = _clip1(p.hp / PLAYER_MAX_HP)
-        obs[5] = world.energy / 100.0
 
-        p_x, p_y, p_vx, p_vy = p.x, p.y, p.vx, p.vy
-        bots_sorted = sorted(
-            world.bots,
-            key=lambda b: (b.x - p_x) ** 2 + (b.y - p_y) ** 2 if b.hp > 0.0 else float("inf"),
-        )[:3]
-        for i, bot in enumerate(bots_sorted):
-            base = 6 + 4 * i
-            obs[base] = (bot.x - p_x) / _REL_NORM
-            obs[base + 1] = (bot.y - p_y) / _REL_NORM
-            obs[base + 2] = _clip1((bot.vx - p_vx) / _VEL_NORM)
-            obs[base + 3] = _clip1((bot.vy - p_vy) / _VEL_NORM)
+        obs[0] = p.x / 1600.0
+        obs[1] = p.y / 900.0
+        obs[2] = p.vx / 260.0
+        obs[3] = p.vy / 260.0
+        obs[4] = p.hp / 100.0
+        obs[5] = p.energy / 100.0
+        obs[6] = min(1.0, p.dash_cd / 3.0)
+        obs[7] = w.combo / 5.0
+        obs[8] = min(1.0, w.wave / 20.0)
 
-        best_proj: Optional[object] = None
-        best_d2 = float("inf")
-        for proj in world.projectiles:
-            dx = proj.x - p_x
-            dy = proj.y - p_y
-            d2 = dx * dx + dy * dy
-            if d2 < best_d2:
-                best_d2 = d2
-                best_proj = proj
-        if best_proj is not None:
-            obs[18] = (best_proj.x - p_x) / _REL_NORM  # type: ignore[union-attr]
-            obs[19] = (best_proj.y - p_y) / _REL_NORM  # type: ignore[union-attr]
-            obs[20] = _clip1((best_proj.vx - p_vx) / _VEL_NORM)  # type: ignore[union-attr]
-            obs[21] = _clip1((best_proj.vy - p_vy) / _VEL_NORM)  # type: ignore[union-attr]
+        bots = [u for u in w.units[1:] if u.kind == 1 and u.alive]
+        bots.sort(key=lambda u: (u.x - p.x) ** 2 + (u.y - p.y) ** 2)
+        for k in range(3):
+            base = 9 + k * 4
+            if k < len(bots):
+                u = bots[k]
+                obs[base] = (u.x - p.x) / 1600.0
+                obs[base + 1] = (u.y - p.y) / 900.0
+                obs[base + 2] = u.vx / 240.0
+                obs[base + 3] = u.hp / 90.0
 
-        obs[22] = world.combo / float(COMBO_MAX)
-        obs[23] = min(world.wave, 12) / _WAVE_NORM
+        projs = [pr for pr in w.projectiles if pr.alive and pr.team == 1]
+        projs.sort(key=lambda pr: (pr.x - p.x) ** 2 + (pr.y - p.y) ** 2)
+        if projs:
+            pr = projs[0]
+            obs[21] = (pr.x - p.x) / 1600.0
+            obs[22] = (pr.y - p.y) / 900.0
+            obs[23] = min(1.0, math.sqrt(pr.vx ** 2 + pr.vy ** 2) / 480.0)
         return obs
+
+    # -- scripted baseline (used by eval) --
+    def scripted_action(self) -> int:
+        """Mirror of the golden-vector script, expressed as an action:
+        always fire at nearest bot, approach/retreat by range, dash when
+        close, nova when packed. Encoded as fire=1 + heuristics."""
+        w = self.world
+        assert w is not None
+        p = w.units[w.player_idx]
+        near = None
+        nd = 1e18
+        count210 = 0
+        for u in w.units[1:]:
+            if u.kind == 1 and u.alive:
+                d2 = (u.x - p.x) ** 2 + (u.y - p.y) ** 2
+                if d2 < nd:
+                    nd, near = d2, u
+                if d2 <= 210.0 ** 2:
+                    count210 += 1
+        move_bucket = 0
+        if near is not None:
+            d = math.sqrt(nd)
+            move_bucket = 1 if d > 200 else 2
+        special = 0
+        if near is not None and math.sqrt(nd) < 150.0 and p.dash_cd <= 0:
+            special = 1
+        elif count210 >= 2 and p.energy >= 55.0:
+            special = 2
+        return (move_bucket * 9) + (1 * 3) + special  # fire mode 1 = aim nearest
+
+
+class _InputLite:
+    __slots__ = ("move_x", "move_y", "aim_x", "aim_y", "fire", "dash", "nova")
+
+    def __init__(self, mx: float, my: float, ax: float, ay: float,
+                 fire: bool, dash: bool, nova: bool) -> None:
+        self.move_x, self.move_y = mx, my
+        self.aim_x, self.aim_y = ax, ay
+        self.fire, self.dash, self.nova = fire, dash, nova
+
+
+# rules.py tick() accepts duck-typed inputs; keep DT import meaningful
+_ = DT
