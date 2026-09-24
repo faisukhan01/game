@@ -1,0 +1,10 @@
+{
+  "name": "com.voidstrike.core",
+  "version": "1.0.0",
+  "displayName": "VOIDSTRIKE Core",
+  "description": "Deterministic Protocol v1 simulation shared by the Unity client. Mirrors core/c — validated with golden vectors.",
+  "unity": "2022.3",
+  "dependencies": {
+    "com.unity.nuget.newtonsoft-json": "3.2.1"
+  }
+}

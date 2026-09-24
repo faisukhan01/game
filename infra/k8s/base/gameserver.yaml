@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: voidstrike-gameserver
+  labels: { app: voidstrike-gameserver }
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app: voidstrike-gameserver }
+  template:
+    metadata:
+      labels: { app: voidstrike-gameserver }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3002"
+    spec:
+      containers:
+        - name: gameserver
+          image: ghcr.io/faisukhan01/voidstrike-gameserver:latest
+          ports: [{ containerPort: 3002 }]
+          env:
+            - { name: PORT, value: "3002" }
+            - { name: MAX_ROOMS, value: "64" }
+          readinessProbe:
+            httpGet: { path: /readyz, port: 3002 }
+            initialDelaySeconds: 2
+          livenessProbe:
+            httpGet: { path: /healthz, port: 3002 }
+            initialDelaySeconds: 5
+          resources:
+            requests: { cpu: 250m, memory: 128Mi }
+            limits: { cpu: "1", memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: voidstrike-gameserver
+spec:
+  selector: { app: voidstrike-gameserver }
+  ports: [{ port: 3002, targetPort: 3002 }]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: voidstrike-gameserver
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: voidstrike-gameserver
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 65 }
