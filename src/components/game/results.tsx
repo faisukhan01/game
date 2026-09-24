@@ -104,12 +104,12 @@ export function Results() {
 
   const leaderboard = useQuery({
     queryKey: ["leaderboard", "results"],
-    queryFn: () => apiGet<LeaderRow[]>("/api/leaderboard?limit=10"),
+    queryFn: () => apiGet<{ entries: LeaderRow[] }>("/api/leaderboard?limit=10"),
     enabled: submitState !== "pending",
   });
 
   const p = payload;
-  const rows = top ?? leaderboard.data ?? [];
+  const rows = top ?? leaderboard.data?.entries ?? [];
 
   return (
     <div className="fixed inset-0 z-40 overflow-y-auto bg-void">

@@ -22,13 +22,17 @@ const TIER = (rank: number): { label: string; cls: string } => {
   return { label: "OPERATOR", cls: "text-mute" };
 };
 
+interface LeaderResponse {
+  entries: LeaderRow[];
+}
+
 export function Ranked() {
   const q = useQuery({
     queryKey: ["leaderboard", "home"],
-    queryFn: () => apiGet<LeaderRow[]>("/api/leaderboard?limit=10"),
+    queryFn: () => apiGet<LeaderResponse>("/api/leaderboard?limit=10"),
     refetchInterval: 30_000,
   });
-  const rows = q.data ?? [];
+  const rows = q.data?.entries ?? [];
 
   return (
     <section id="ranked" className="scroll-mt-20 border-t border-line px-4 py-16 md:px-6 md:py-24">
