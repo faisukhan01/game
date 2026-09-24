@@ -1,0 +1,89 @@
+{
+  "protocol": "VOIDSTRIKE_SIM_V1",
+  "rules_hash": "0xbfb4742570daa8fb",
+  "generator": "core/c v1.0.0",
+  "script": "wave-survival-default",
+  "sampling": "every 60 ticks, 600 ticks per case",
+  "cases": [
+    {
+      "seed": 1337,
+      "ticks": 600,
+      "checksums": [
+        { "tick": 60, "checksum": "0xa7c1e728c52ae222" },
+        { "tick": 120, "checksum": "0xfb831dcfb7db4728" },
+        { "tick": 180, "checksum": "0x12928558632fd4be" },
+        { "tick": 240, "checksum": "0x0b0a271a983c368f" },
+        { "tick": 300, "checksum": "0x34b311eed71e761a" },
+        { "tick": 360, "checksum": "0x11b076c46ad03183" },
+        { "tick": 420, "checksum": "0xa069634874943182" },
+        { "tick": 480, "checksum": "0x2c78efd3b267691d" },
+        { "tick": 540, "checksum": "0xc00a05296cd0d0de" },
+        { "tick": 600, "checksum": "0x897cae4fa5511400" }
+      ]
+    },
+    {
+      "seed": 424242,
+      "ticks": 600,
+      "checksums": [
+        { "tick": 60, "checksum": "0xd4f7fa6b386dce8e" },
+        { "tick": 120, "checksum": "0x5cec24f0fe6aaa1b" },
+        { "tick": 180, "checksum": "0xc9a559bf7c17bd3d" },
+        { "tick": 240, "checksum": "0x7edfeb3748c11db1" },
+        { "tick": 300, "checksum": "0x9570c438b3fd98fe" },
+        { "tick": 360, "checksum": "0xbcc23607a71733c1" },
+        { "tick": 420, "checksum": "0x0281bb022b5a75c4" },
+        { "tick": 480, "checksum": "0xfe8a17d177a8a78e" },
+        { "tick": 540, "checksum": "0x529a80fae4765f1f" },
+        { "tick": 600, "checksum": "0xaa1254524ce6eb2c" }
+      ]
+    },
+    {
+      "seed": 999,
+      "ticks": 600,
+      "checksums": [
+        { "tick": 60, "checksum": "0x6c9800ffe3930e93" },
+        { "tick": 120, "checksum": "0xacfffdc4b20d93e2" },
+        { "tick": 180, "checksum": "0xc85e521232436de4" },
+        { "tick": 240, "checksum": "0xe1ee847ea86343e1" },
+        { "tick": 300, "checksum": "0x1781e06d52b5a45c" },
+        { "tick": 360, "checksum": "0xb5da447da792f24d" },
+        { "tick": 420, "checksum": "0x58c258a95d91b221" },
+        { "tick": 480, "checksum": "0x5dd2fdbd8d036959" },
+        { "tick": 540, "checksum": "0x39c1ddaff134e8db" },
+        { "tick": 600, "checksum": "0x2c69bbb60bb8557e" }
+      ]
+    },
+    {
+      "seed": 7777,
+      "ticks": 600,
+      "checksums": [
+        { "tick": 60, "checksum": "0x45e393a709cf0bc3" },
+        { "tick": 120, "checksum": "0x876ff98a07438c01" },
+        { "tick": 180, "checksum": "0xd01ece8fe94a86fc" },
+        { "tick": 240, "checksum": "0x88bb4f082ce6f91d" },
+        { "tick": 300, "checksum": "0xfe8b25d7748435c3" },
+        { "tick": 360, "checksum": "0x6a607b7a24266cbe" },
+        { "tick": 420, "checksum": "0x984092e7407a29bf" },
+        { "tick": 480, "checksum": "0x7a6f6699c99a81d9" },
+        { "tick": 540, "checksum": "0x63a56068f37b0c8c" },
+        { "tick": 600, "checksum": "0x46bb5cab41a3180b" }
+      ]
+    },
+    {
+      "seed": 20260924,
+      "ticks": 600,
+      "checksums": [
+        { "tick": 60, "checksum": "0x91d154eace5b4afd" },
+        { "tick": 120, "checksum": "0x2640e1b8bdb764d2" },
+        { "tick": 180, "checksum": "0x0de3eab244e7c60e" },
+        { "tick": 240, "checksum": "0x1b493b9e6e91bbfd" },
+        { "tick": 300, "checksum": "0x5cee5ba9b35d41c7" },
+        { "tick": 360, "checksum": "0x854e52df117cacd0" },
+        { "tick": 420, "checksum": "0x208525f6bc800e27" },
+        { "tick": 480, "checksum": "0x751d26f5c1b5f9f7" },
+        { "tick": 540, "checksum": "0xd8169b4799275bf7" },
+        { "tick": 600, "checksum": "0x3b12272422c43736" }
+      ]
+    }
+  ]
+}
