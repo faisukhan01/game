@@ -64,6 +64,7 @@ export class GameLoop {
   private minimapCtx: CanvasRenderingContext2D | null = null;
   private scale = 1;
   private dpr = 1;
+  private lastDt = 1 / 60;
 
   paused = false;
 
@@ -116,6 +117,7 @@ export class GameLoop {
 
     const dtMs = Math.min(t - this.last, 100);
     this.last = t;
+    this.lastDt = Math.min(Math.max(dtMs / 1000, 0.001), 0.1);
 
     const active = !this.paused && !this.world.over;
     if (active) {
@@ -169,7 +171,7 @@ export class GameLoop {
   private render(): void {
     const k = this.scale * this.dpr;
     this.ctx.setTransform(k, 0, 0, k, 0, 0);
-    renderGame(this.ctx, this.world, this.fx, this.resolveMonoFont());
+    renderGame(this.ctx, this.world, this.fx, this.resolveMonoFont(), this.lastDt);
   }
 
   private writeHud(): void {

@@ -1,0 +1,104 @@
+name: android-apk
+
+# Builds the VOIDSTRIKE mobile client (Flutter + Flame) and publishes the
+# release APK to a rolling `apk-latest` GitHub Release on every push to main.
+# Versioned APK releases are cut by release.yml on v* tags. Can also be
+# triggered manually.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "mobile/flutter_app/**"
+      - ".github/workflows/android-apk.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    name: Build + release APK
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile/flutter_app
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter (stable)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Pub get
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
+      - name: Build release APK (universal)
+        run: flutter build apk --release
+
+      - name: Stage APK artifact
+        run: |
+          VERSION=$(grep -m1 '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)
+          SHORT_SHA=${GITHUB_SHA::7}
+          mkdir -p /tmp/apk
+          cp build/app/outputs/flutter-apk/app-release.apk \
+             "/tmp/apk/VOIDSTRIKE-mobile-v${VERSION}-${SHORT_SHA}.apk"
+          cp build/app/outputs/flutter-apk/app-release.apk /tmp/apk/VOIDSTRIKE-mobile-latest.apk
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "SHORT_SHA=${SHORT_SHA}" >> "$GITHUB_ENV"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: voidstrike-apk-${{ github.run_number }}
+          path: /tmp/apk/VOIDSTRIKE-mobile-*.apk
+          if-no-files-found: error
+
+      - name: Publish rolling release (apk-latest)
+        if: github.ref == 'refs/heads/main'
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          TAG="apk-latest"
+          TITLE="VOIDSTRIKE Mobile — Latest Build"
+          NOTES=$(printf '%s\n' \
+            "Universal release APK of the VOIDSTRIKE mobile client (Flutter + Flame)." \
+            "" \
+            "| | |" \
+            "|---|---|" \
+            "| Build | #${GITHUB_RUN_NUMBER} |" \
+            "| Commit | \`${SHORT_SHA}\` on \`main\` |" \
+            "| Version | \`${VERSION}\` |" \
+            "| ABI | universal (arm64 + armeabi-v7a + x86_64) |" \
+            "" \
+            "**Install:** download \`VOIDSTRIKE-mobile-latest.apk\` on your Android device, allow \"install unknown apps\" for your browser/file manager, then open the APK. Min Android 7.0 (API 24)." \
+            "" \
+            "_Replaced automatically by every green build on \`main\`._")
+          if gh release view "$TAG" -R "$REPO" > /dev/null 2>&1; then
+            gh release upload "$TAG" /tmp/apk/VOIDSTRIKE-mobile-latest.apk --clobber -R "$REPO"
+            gh release edit "$TAG" -R "$REPO" --title "$TITLE" --notes "$NOTES"
+          else
+            gh release create "$TAG" /tmp/apk/VOIDSTRIKE-mobile-latest.apk \
+              -R "$REPO" --title "$TITLE" --notes "$NOTES" --latest
+          fi

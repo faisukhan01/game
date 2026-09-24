@@ -4,6 +4,7 @@
  * deterministic sim never reads this layer.
  */
 
+import { noteFighterShot } from "./characters";
 import type { World } from "@/lib/sim/world";
 import type { SimEvent } from "@/lib/sim/types";
 
@@ -55,6 +56,16 @@ interface Afterimage {
   life: number;
 }
 
+export interface MuzzleFlash {
+  x: number;
+  y: number;
+  dx: number;
+  dy: number;
+  team: 0 | 1;
+  life: number;
+  maxLife: number;
+}
+
 function rand(min: number, max: number): number {
   return min + Math.random() * (max - min);
 }
@@ -64,6 +75,7 @@ export class Effects {
   floaters: Floater[] = [];
   rings: Ring[] = [];
   afterimages: Afterimage[] = [];
+  flashes: MuzzleFlash[] = [];
   shakeEnabled = true;
   private pHead = 0;
   private fHead = 0;
@@ -144,6 +156,11 @@ export class Effects {
     a.life = 0.28;
   }
 
+  private spawnFlash(x: number, y: number, dx: number, dy: number, team: 0 | 1): void {
+    this.flashes.push({ x, y, dx, dy, team, life: 0.07, maxLife: 0.07 });
+    if (this.flashes.length > 16) this.flashes.shift();
+  }
+
   addShake(amp: number): void {
     if (!this.shakeEnabled) return;
     this.shakeAmp = Math.max(this.shakeAmp, amp);
@@ -184,11 +201,15 @@ export class Effects {
       case "shot":
         if (e.x !== undefined && e.y !== undefined) {
           this.muzzle(e.x, e.y, e.dirX ?? 1, e.dirY ?? 0, e.team ?? 0);
+          this.spawnFlash(e.x, e.y, e.dirX ?? 1, e.dirY ?? 0, e.team ?? 0);
+          noteFighterShot(world, e.x, e.y, e.dirX ?? 1, e.dirY ?? 0);
         }
         break;
       case "bot_shot":
         if (e.x !== undefined && e.y !== undefined) {
           this.muzzle(e.x, e.y, e.dirX ?? 1, e.dirY ?? 0, 1);
+          this.spawnFlash(e.x, e.y, e.dirX ?? 1, e.dirY ?? 0, 1);
+          noteFighterShot(world, e.x, e.y, e.dirX ?? 1, e.dirY ?? 0);
         }
         break;
       case "hit":
@@ -265,6 +286,11 @@ export class Effects {
       const a = this.afterimages[i];
       if (a.life <= 0) continue;
       a.life -= dt;
+    }
+    for (let i = this.flashes.length - 1; i >= 0; i--) {
+      const fl = this.flashes[i];
+      fl.life -= dt;
+      if (fl.life <= 0) this.flashes.splice(i, 1);
     }
 
     // Dash afterimage trail (spawn while the dash window is open).
