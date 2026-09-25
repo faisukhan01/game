@@ -2,9 +2,11 @@
 ///
 /// Fixed 60Hz accumulator step on top of the engine's update cycle; the sim
 /// mirrors Protocol v1 for the player-side state (bots run the same FSM
-/// thresholds as the server). The presentation is a 2.5D side view: a
-/// follow-camera pans across the projected arena so soldiers read at phone
-/// scale. Online Versus connects to the Go server.
+/// thresholds as the server). The presentation is a 2.5D side view of the
+/// dusk-lit "OLD TOWN PARK" arena (see environment.dart): a baked sky +
+/// derelict skyline and park ground, themed abandoned cover, swaying
+/// scenery, and a follow-camera that pans across the projected world so
+/// soldiers read at phone scale. Online Versus connects to the Go server.
 library;
 
 import 'dart:math' as math;
@@ -14,6 +16,7 @@ import 'dart:ui' show Canvas, Color, Offset, Paint, PaintingStyle, Rect, Size;
 import 'package:flame/camera.dart';
 import 'package:flame/game.dart';
 
+import 'environment.dart';
 import 'protocol.dart';
 import 'soldier.dart';
 
@@ -107,6 +110,9 @@ class VoidstrikeGame extends FlameGame {
   // follow camera (projected space)
   double camX = 0, camY = -80;
 
+  /// Ambient scene clock (seconds) — drives tree sway, clouds and birds.
+  double sceneT = 0;
+
   // aim assist: re-engages after this many seconds without manual aim input
   double _manualAimTimer = 0;
   static const double _manualAimHold = 2.5;
@@ -160,6 +166,7 @@ class VoidstrikeGame extends FlameGame {
   @override
   void update(double dt) {
     super.update(dt);
+    sceneT += dt; // ambient scene clock (sway / clouds / birds)
     // Fixed-step accumulator: run Protocol ticks at 60Hz.
     _acc += dt;
     var steps = 0;
@@ -550,63 +557,22 @@ class VoidstrikeGame extends FlameGame {
   }
 
   void _renderBackdrop(Canvas canvas) {
-    const floorBottom = VsWorld.height * kTilt;
-    // Sky above the horizon.
-    canvas.drawRect(
-      Rect.fromLTWH(-80, -400, VsWorld.width + 160, 400),
-      Paint()..color = const Color(VsColors.void_),
-    );
-    canvas.drawRect(
-      Rect.fromLTWH(-80, -170, VsWorld.width + 160, 170),
-      Paint()
-        ..shader = ui.Gradient.linear(
-          const Offset(0, -170),
-          const Offset(0, 0),
-          [const Color(0x00C8F31D), const Color(0x0FC8F31D)],
-        ),
-    );
-    // Floor deck.
-    canvas.drawRect(
-      Rect.fromLTWH(0, 0, VsWorld.width, floorBottom),
-      Paint()..color = const Color(0xFF0B0D10),
-    );
-    // Grid — verticals + depth-squashed horizontals.
-    final grid = Paint()
-      ..color = const Color(0x0DFFFFFF)
-      ..strokeWidth = 1;
-    final path = ui.Path();
-    for (var x = 24.0; x < VsWorld.width; x += 24) {
-      path.moveTo(x, 0);
-      path.lineTo(x, floorBottom);
-    }
-    for (var y = 24.0; y < VsWorld.height; y += 24) {
-      final gy = groundY(y);
-      path.moveTo(0, gy);
-      path.lineTo(VsWorld.width, gy);
-    }
-    canvas.drawPath(path, grid);
-    // Horizon strip + border.
-    canvas.drawLine(
-      const Offset(0, 0),
-      Offset(VsWorld.width, 0),
-      Paint()
-        ..color = const Color(0x29C8F31D)
-        ..strokeWidth = 1.5,
-    );
-    canvas.drawRect(
-      Rect.fromLTWH(0, 0, VsWorld.width, floorBottom),
-      Paint()
-        ..color = const Color(0x24FFFFFF)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5,
-    );
+    // OLD TOWN PARK: baked dusk sky + skyline, then the park ground band
+    // (all static art lives in baked pictures inside environment.dart).
+    drawSky(canvas, sceneT);
+    drawGround(canvas);
   }
 
   void _renderWorld(Canvas canvas) {
-    // Depth-sorted drawables: cover boxes + operatives by floor y.
+    // Depth-sorted drawables: themed cover, park scenery + fighters by
+    // floor y (same order the web renderer builds).
     final order = <_Drawable>[];
-    for (final ob in obstacles) {
-      order.add(_Drawable(ob[1] + ob[3], box: ob));
+    for (var i = 0; i < obstacles.length; i++) {
+      final ob = obstacles[i];
+      order.add(_Drawable(ob[1] + ob[3], boxIndex: i));
+    }
+    for (final d in kDecor) {
+      order.add(_Drawable(d.y, decor: d));
     }
     for (final b in bots) {
       if (b.alive) order.add(_Drawable(b.y, bot: b));
@@ -617,8 +583,24 @@ class VoidstrikeGame extends FlameGame {
     final chestAll = soldierChestLift(player.radius) * 0.92;
 
     for (final d in order) {
-      if (d.box != null) {
-        _renderBox(canvas, d.box!);
+      final boxIndex = d.boxIndex;
+      if (boxIndex != null) {
+        final ob = obstacles[boxIndex];
+        drawStructure(canvas, boxIndex, ob);
+        // X-ray ghost: if the striker is hidden behind this structure, draw
+        // a translucent silhouette over it so the player never loses
+        // themselves.
+        if (player.alive &&
+            player.x >= ob[0] &&
+            player.x <= ob[0] + ob[2] &&
+            player.y >= ob[1] - 24 &&
+            player.y <= ob[1] + ob[3]) {
+          canvas.saveLayer(null, Paint()..alpha = 0.42);
+          _paintSoldierOf(canvas, player, isPlayer: true);
+          canvas.restore();
+        }
+      } else if (d.decor != null) {
+        drawDecor(canvas, d.decor!, sceneT);
       } else if (d.bot != null) {
         _renderFighter(canvas, d.bot!, isPlayer: false);
       } else {
@@ -659,58 +641,11 @@ class VoidstrikeGame extends FlameGame {
     }
   }
 
-  void _renderBox(Canvas canvas, List<double> ob) {
-    final bx = ob[0], by = ob[1], bw = ob[2], bh = ob[3];
-    final h = bh * 1.32;
-    final yFar = groundY(by);
-    final yNear = groundY(by + bh);
-    // Front face.
-    canvas.drawRect(
-      Rect.fromLTWH(bx, yNear - h, bw, h),
-      Paint()
-        ..shader = ui.Gradient.linear(
-          Offset(0, yNear - h),
-          Offset(0, yNear),
-          [const Color(0xFF151920), const Color(0xFF0A0C10)],
-        ),
-    );
-    // Top face.
-    canvas.drawRect(
-      Rect.fromLTWH(bx, yFar - h, bw, yNear - yFar),
-      Paint()..color = const Color(0xFF1B2028),
-    );
-    // Silhouette + deck edge.
-    canvas.drawRect(
-      Rect.fromLTWH(bx, yFar - h, bw, yNear - yFar + h),
-      Paint()
-        ..color = const Color(0x24FFFFFF)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.4,
-    );
-    canvas.drawLine(
-      Offset(bx, yNear - h),
-      Offset(bx + bw, yNear - h),
-      Paint()
-        ..color = const Color(0x38FFFFFF)
-        ..strokeWidth = 1.4,
-    );
-    // Volt corner ticks on the deck.
-    final tick = Paint()
-      ..color = const Color(0x80C8F31D)
-      ..strokeWidth = 1.6;
-    final t = 9.0;
-    canvas.drawLine(Offset(bx, yFar - h + t), Offset(bx, yFar - h), tick);
-    canvas.drawLine(Offset(bx, yFar - h), Offset(bx + t, yFar - h), tick);
-    canvas.drawLine(Offset(bx + bw - t, yFar - h), Offset(bx + bw, yFar - h), tick);
-    canvas.drawLine(Offset(bx + bw, yFar - h), Offset(bx + bw, yFar - h + t), tick);
-  }
-
   void _renderFighter(Canvas canvas, Fighter f, {required bool isPlayer}) {
     final s = f.radius * kVisualScale;
-    final gaitPhase = (f.gait / (s * 2.9)) * math.pi * 2;
 
     if (isPlayer) {
-      // Dash-ready ring on the deck under the boots.
+      // Dash-ready ring on the ground under the boots.
       final ready = f.dashCd <= 0;
       canvas.drawOval(
         Rect.fromCenter(
@@ -725,20 +660,7 @@ class VoidstrikeGame extends FlameGame {
       );
     }
 
-    paintSoldier(
-      canvas,
-      x: f.x,
-      y: f.y,
-      radius: f.radius,
-      side: f.side,
-      aimX: isPlayer ? aimX : _botAimX(f),
-      aimY: isPlayer ? aimY : _botAimY(f),
-      gaitPhase: gaitPhase,
-      stride: f.stride,
-      backPedal: f.backPedal,
-      palette: isPlayer ? SoldierPalette.player : SoldierPalette.bot,
-      dashReady: isPlayer && f.dashCd <= 0,
-    );
+    _paintSoldierOf(canvas, f, isPlayer: isPlayer);
 
     // HP bar floats above the helmet.
     if (!isPlayer && f.hp < f.maxHp) {
@@ -756,6 +678,26 @@ class VoidstrikeGame extends FlameGame {
     }
   }
 
+  /// Shared soldier painter — also used by the X-ray ghost overlay.
+  void _paintSoldierOf(Canvas canvas, Fighter f, {required bool isPlayer}) {
+    final s = f.radius * kVisualScale;
+    final gaitPhase = (f.gait / (s * 2.9)) * math.pi * 2;
+    paintSoldier(
+      canvas,
+      x: f.x,
+      y: f.y,
+      radius: f.radius,
+      side: f.side,
+      aimX: isPlayer ? aimX : _botAimX(f),
+      aimY: isPlayer ? aimY : _botAimY(f),
+      gaitPhase: gaitPhase,
+      stride: f.stride,
+      backPedal: f.backPedal,
+      palette: isPlayer ? SoldierPalette.player : SoldierPalette.bot,
+      dashReady: isPlayer && f.dashCd <= 0,
+    );
+  }
+
   double _botAimX(Fighter b) {
     if (b.state == BotAiState.attack || b.state == BotAiState.chase) {
       return player.x - b.x;
@@ -771,11 +713,13 @@ class VoidstrikeGame extends FlameGame {
   }
 }
 
-/// Depth-sort entry: boxes and fighters interleave by their floor y.
+/// Depth-sort entry: cover, scenery and fighters interleave by their floor y.
 class _Drawable {
-  _Drawable(this.sortY, {this.box, this.bot, this.isPlayer = false});
+  _Drawable(this.sortY,
+      {this.boxIndex, this.decor, this.bot, this.isPlayer = false});
   final double sortY;
-  final List<double>? box;
+  final int? boxIndex;
+  final Decor? decor;
   final Fighter? bot;
   final bool isPlayer;
 }
