@@ -15,7 +15,7 @@ import 'dart:ui' as ui;
 
 import 'package:flame/game.dart';
 import 'package:flutter/painting.dart'
-    show TextBaseline, TextPainter, TextSpan, TextStyle, FontWeight;
+    show TextPainter, TextSpan, TextStyle, FontWeight;
 
 import 'protocol.dart';
 
@@ -172,7 +172,7 @@ class VoidstrikeGame extends FlameGame {
     [800, 830],
   ];
 
-  static final List<_Building> buildings = [
+  static final List<_Building> _buildings = [
     // North row (behind y < -180)
     _Building(-140, -540, 300, 340, 190, ui.Color(0xFF6E4A3A)),
     _Building(190, -520, 260, 320, 260, ui.Color(0xFF77796F)),
@@ -195,7 +195,7 @@ class VoidstrikeGame extends FlameGame {
     _Building(1840, 440, 320, 300, 220, ui.Color(0xFF77796F)),
   ];
 
-  static final List<_Prop> props = [
+  static final List<_Prop> _props = [
     _Prop(-180, -66, 'car'),
     _Prop(320, -62, 'car'),
     _Prop(760, -66, 'car'),
@@ -780,6 +780,7 @@ class VoidstrikeGame extends FlameGame {
 
   @override
   void render(ui.Canvas canvas) {
+    super.render(canvas);
     _cx = size.x / 2;
     _horizonY = size.y * kHorizonFrac;
     _focal = size.y * 0.66;
@@ -789,14 +790,14 @@ class VoidstrikeGame extends FlameGame {
 
     // Depth-sorted world: far → near.
     final items = <_Item>[];
-    for (final b in buildings) {
+    for (final b in _buildings) {
       items.add(_Item(depthOf(b.x + b.w / 2, b.y + b.d / 2), building: b));
     }
     for (var i = 0; i < obstacles.length; i++) {
       final o = obstacles[i];
       items.add(_Item(depthOf(o[0] + o[2] / 2, o[1] + o[3] / 2), cover: i));
     }
-    for (final p in props) {
+    for (final p in _props) {
       items.add(_Item(depthOf(p.x, p.y), prop: p));
     }
     for (final b in bots) {
@@ -1037,10 +1038,10 @@ class VoidstrikeGame extends FlameGame {
 
   ui.Color _shade(ui.Color c, double k) {
     return ui.Color.fromARGB(
-      c.alpha,
-      (c.red * k).clamp(0, 255).toInt(),
-      (c.green * k).clamp(0, 255).toInt(),
-      (c.blue * k).clamp(0, 255).toInt(),
+      (c.a * 255.0).round(),
+      ((c.r * 255.0) * k).round().clamp(0, 255).toInt(),
+      ((c.g * 255.0) * k).round().clamp(0, 255).toInt(),
+      ((c.b * 255.0) * k).round().clamp(0, 255).toInt(),
     );
   }
 
@@ -1190,7 +1191,7 @@ class VoidstrikeGame extends FlameGame {
     final hat = isPlayer ? const ui.Color(0xFF121316) : const ui.Color(0xFF4D151D);
     final accent = isPlayer ? const ui.Color(0xFFC8F31D) : const ui.Color(0xFFFF3D5A);
 
-    final pPaint = (ui.Color c, [double? a]) => ui.Paint()
+    ui.Paint pPaint(ui.Color c, [double? a]) => ui.Paint()
       ..color = c.withValues(alpha: (a ?? 1.0) * alpha);
 
     // Legs.
