@@ -14,6 +14,8 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flame/game.dart';
+import 'package:flutter/painting.dart'
+    show TextBaseline, TextPainter, TextSpan, TextStyle, FontWeight;
 
 import 'protocol.dart';
 
@@ -240,10 +242,11 @@ class VoidstrikeGame extends FlameGame {
   }
 
   void _buildDinerSign() {
+    const bounds = ui.Rect.fromLTWH(0, 0, 220, 56);
     final recorder = ui.PictureRecorder();
-    final c = recorder.beginRecording(const ui.Rect.fromLTWH(0, 0, 220, 56));
+    final c = ui.Canvas(recorder, bounds);
     c.drawRect(
-      const ui.Rect.fromLTWH(0, 0, 220, 56),
+      bounds,
       ui.Paint()..color = const ui.Color(0xE0141416),
     );
     c.drawRect(
@@ -253,13 +256,13 @@ class VoidstrikeGame extends FlameGame {
         ..strokeWidth = 2
         ..color = const ui.Color(0x88FF5A5A),
     );
-    final tp = ui.TextPainter(
-      text: const ui.TextSpan(
+    final tp = TextPainter(
+      text: const TextSpan(
         text: 'DINER',
-        style: ui.TextStyle(
+        style: TextStyle(
           color: ui.Color(0xFFFF5A5A),
           fontSize: 34,
-          fontWeight: ui.FontWeight.w900,
+          fontWeight: FontWeight.w900,
           letterSpacing: 6,
         ),
       ),
@@ -893,7 +896,7 @@ class VoidstrikeGame extends FlameGame {
 
     // Lane dashes (three lanes each way).
     for (final laneY in const [150.0, 300.0, 600.0, 750.0]) {
-      for (var x = -720; x <= 1560; x += 90) {
+      for (double x = -720; x <= 1560; x += 90) {
         _drawGroundQuad(canvas, x, laneY - 2, 38, 4, const ui.Color(0xBBD8D4C2));
       }
     }
@@ -1035,9 +1038,9 @@ class VoidstrikeGame extends FlameGame {
   ui.Color _shade(ui.Color c, double k) {
     return ui.Color.fromARGB(
       c.alpha,
-      (c.red * k).clamp(0, 255),
-      (c.green * k).clamp(0, 255),
-      (c.blue * k).clamp(0, 255),
+      (c.red * k).clamp(0, 255).toInt(),
+      (c.green * k).clamp(0, 255).toInt(),
+      (c.blue * k).clamp(0, 255).toInt(),
     );
   }
 
