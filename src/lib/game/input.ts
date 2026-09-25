@@ -1,10 +1,12 @@
 /**
- * VOIDSTRIKE — input aggregation (keyboard + mouse + twin virtual sticks).
- * Produces per-tick SimInput snapshots; edge actions (dash/nova) are consumed
- * exactly once. No React deps — plain class wired by the game view.
+ * VOIDSTRIKE — input aggregation (keyboard + mouse look + touch).
+ *
+ * GTA-style controls: movement is camera-relative (W walks where the
+ * camera faces), aiming comes from the 3D view's screen-center raycast
+ * (optionally soft-snapped to a nearby hostile for touch), firing is a
+ * held state, dash/nova are queued edges. The camera yaw is fed in by
+ * the view each frame; this class never owns the camera.
  */
-
-import { WORLD_H, WORLD_W } from "@/lib/sim/constants";
 
 export interface InputFrame {
   moveX: number;
@@ -45,15 +47,17 @@ export class InputManager {
   private keys = new Set<string>();
   private detachFns: Array<() => void> = [];
 
-  /** Mouse position in world units; valid when mouseActive. */
-  mouseWorldX = WORLD_W / 2;
-  mouseWorldY = WORLD_H / 2;
-  mouseActive = false;
+  /** Camera yaw (radians) fed in by the 3D view each frame. */
+  cameraYaw = 0;
+  /** Aim point in sim coords, fed in by the 3D view each frame. */
+  aimPointX = 1200;
+  aimPointY = 450;
+  /** Soft aim-snap for touch play. */
+  aimAssist = false;
   fireHeld = false;
 
-  /** Twin virtual sticks (touch). Vectors normalized to length ≤ 1. */
+  /** Virtual move stick (touch). Vector normalized to length ≤ 1. */
   moveStick: Stick = { active: false, x: 0, y: 0 };
-  aimStick: Stick = { active: false, x: 0, y: 0 };
 
   private dashQueued = false;
   private novaQueued = false;
@@ -98,12 +102,6 @@ export class InputManager {
     this.keys.clear();
   }
 
-  setMouseWorld(x: number, y: number): void {
-    this.mouseWorldX = x;
-    this.mouseWorldY = y;
-    this.mouseActive = true;
-  }
-
   setFireHeld(v: boolean): void {
     this.fireHeld = v;
   }
@@ -122,7 +120,11 @@ export class InputManager {
     this.novaQueued = false;
   }
 
-  /** Build the per-tick input frame; edges are consumed on first read. */
+  /**
+   * Build the per-tick input frame; edges are consumed on first read.
+   * Movement is rotated into world space around the camera yaw; aim is
+   * the screen-center aim point relative to the player.
+   */
   sample(px: number, py: number): InputFrame {
     let mx = 0;
     let my = 0;
@@ -142,18 +144,19 @@ export class InputManager {
       my /= ml;
     }
 
-    let ax = 0;
-    let ay = 0;
-    if (this.aimStick.active && this.aimStick.x * this.aimStick.x + this.aimStick.y * this.aimStick.y > 1e-6) {
-      ax = this.aimStick.x;
-      ay = this.aimStick.y;
-    } else if (this.mouseActive) {
-      ax = this.mouseWorldX - px;
-      ay = this.mouseWorldY - py;
-    } else {
-      ax = this.lastAimX;
-      ay = this.lastAimY;
-    }
+    // Camera-relative movement: forward = -my along camera forward.
+    const yaw = this.cameraYaw;
+    const fx = Math.sin(yaw);
+    const fy = -Math.cos(yaw);
+    const rx = Math.cos(yaw);
+    const ry = Math.sin(yaw);
+    const fwd = -my;
+    const wx = fx * fwd + rx * mx;
+    const wy = fy * fwd + ry * mx;
+
+    // Aim: screen-center raycast point relative to the player.
+    let ax = this.aimPointX - px;
+    let ay = this.aimPointY - py;
     const al = Math.sqrt(ax * ax + ay * ay);
     if (al > 1e-6) {
       this.lastAimX = ax / al;
@@ -166,11 +169,11 @@ export class InputManager {
     this.novaQueued = false;
 
     return {
-      moveX: mx,
-      moveY: my,
+      moveX: wx,
+      moveY: wy,
       aimX: this.lastAimX,
       aimY: this.lastAimY,
-      fire: this.fireHeld || this.aimStick.active,
+      fire: this.fireHeld,
       dash,
       nova,
     };

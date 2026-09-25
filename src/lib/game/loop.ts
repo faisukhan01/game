@@ -1,18 +1,18 @@
 /**
  * VOIDSTRIKE — game loop. Fixed 60Hz simulation via accumulator inside a
- * rAF frame; rendering and HUD writes are separated from the sim. The loop
- * owns zero React state: HUD numbers are written straight to DOM refs so
- * React never re-renders at frame rate.
+ * rAF frame; rendering (GTA-style 3D view) and HUD writes are separated
+ * from the sim. The loop owns zero React state: HUD numbers are written
+ * straight to DOM refs so React never re-renders at frame rate.
  */
 
-import { DT, PLAYER, NOVA, WORLD_H, WORLD_W } from "@/lib/sim/constants";
+import { DT, PLAYER, NOVA } from "@/lib/sim/constants";
 import type { MatchStats, SimEvent } from "@/lib/sim/types";
 import type { World } from "@/lib/sim/world";
 import { Effects } from "./effects";
 import { drawMinimap, MINIMAP_H, MINIMAP_W } from "./minimap";
-import { renderGame } from "./renderer";
 import type { SfxEngine } from "./sfx";
 import type { InputManager } from "./input";
+import { View3D } from "./view3d";
 
 const STEP_MS = 1000 / 60;
 const MAX_STEPS_PER_FRAME = 5;
@@ -62,22 +62,34 @@ export class GameLoop {
   private frameCount = 0;
   private monoFont = "";
   private minimapCtx: CanvasRenderingContext2D | null = null;
-  private scale = 1;
-  private dpr = 1;
+  private view: View3D;
   private lastDt = 1 / 60;
 
   paused = false;
 
   constructor(
     private canvas: HTMLCanvasElement,
-    private ctx: CanvasRenderingContext2D,
     private world: World,
     private fx: Effects,
     private sfx: SfxEngine,
     private input: InputManager,
     private hud: HudRefs,
     private cb: LoopCallbacks,
-  ) {}
+  ) {
+    this.view = new View3D(canvas);
+    // Debug hooks for dev tooling.
+    (window as unknown as Record<string, unknown>).__vsWorld = world;
+    (window as unknown as Record<string, unknown>).__vsLoop = this;
+  }
+
+  /** DOM layer for projected damage numbers; parent must be position:relative. */
+  get floaterHost(): HTMLDivElement {
+    return this.view.floaterHost;
+  }
+
+  get view3d(): View3D {
+    return this.view;
+  }
 
   start(): void {
     if (this.running) return;
@@ -93,9 +105,13 @@ export class GameLoop {
     this.raf = 0;
   }
 
-  setScale(scale: number, dpr: number): void {
-    this.scale = scale;
-    this.dpr = dpr;
+  resize(cssW: number, cssH: number, dpr: number): void {
+    this.view.resize(cssW, cssH, dpr);
+  }
+
+  /** Rotate the camera (mouse look / touch look drag), deltas in px. */
+  look(dx: number, dy: number): void {
+    this.view.look(dx, dy);
   }
 
   private resolveMonoFont(): string {
@@ -169,9 +185,7 @@ export class GameLoop {
   }
 
   private render(): void {
-    const k = this.scale * this.dpr;
-    this.ctx.setTransform(k, 0, 0, k, 0, 0);
-    renderGame(this.ctx, this.world, this.fx, this.resolveMonoFont(), this.lastDt);
+    this.view.render(this.world, this.fx, this.input, this.lastDt);
   }
 
   private writeHud(): void {
@@ -237,6 +251,11 @@ export class GameLoop {
       if (this.minimapCtx) drawMinimap(this.minimapCtx, this.world);
     }
   }
+
+  dispose(): void {
+    this.stop();
+    this.view.dispose();
+  }
 }
 
-export { WORLD_H, WORLD_W };
+export { NOVA };

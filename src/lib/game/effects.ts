@@ -4,7 +4,6 @@
  * deterministic sim never reads this layer.
  */
 
-import { noteFighterShot } from "./characters";
 import type { World } from "@/lib/sim/world";
 import type { SimEvent } from "@/lib/sim/types";
 
@@ -202,14 +201,12 @@ export class Effects {
         if (e.x !== undefined && e.y !== undefined) {
           this.muzzle(e.x, e.y, e.dirX ?? 1, e.dirY ?? 0, e.team ?? 0);
           this.spawnFlash(e.x, e.y, e.dirX ?? 1, e.dirY ?? 0, e.team ?? 0);
-          noteFighterShot(world, e.x, e.y, e.dirX ?? 1, e.dirY ?? 0);
         }
         break;
       case "bot_shot":
         if (e.x !== undefined && e.y !== undefined) {
           this.muzzle(e.x, e.y, e.dirX ?? 1, e.dirY ?? 0, 1);
           this.spawnFlash(e.x, e.y, e.dirX ?? 1, e.dirY ?? 0, 1);
-          noteFighterShot(world, e.x, e.y, e.dirX ?? 1, e.dirY ?? 0);
         }
         break;
       case "hit":
