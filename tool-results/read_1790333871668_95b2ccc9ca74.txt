@@ -1,0 +1,1162 @@
+     1→     1→/**
+     2→     2→ * VOIDSTRIKE — natural arena environment ("OLD TOWN PARK" theme).
+     3→     3→ *
+     4→     4→ * The deterministic sim only knows five AABB cover footprints; this module
+     5→     5→ * re-skins the presentation as an abandoned park on the edge of a derelict
+     6→     6→ * housing society at dusk: dry grass and dirt paths, a cracked road,
+     7→     7→ * boundary walls, an abandoned restaurant, market kiosks and a guard cabin
+     8→     8→ * built over those same footprints (visual-only — collisions never change).
+     9→     9→ *
+    10→    10→ * Everything static is baked once into offscreen canvases (sky, skyline,
+    11→    11→ * ground scatter, each structure's faces). Only swaying trees, drifting
+    12→    12→ * clouds and birds are drawn per-frame. The seeded RNG keeps the arena
+    13→    13→ * pixel-identical across reloads.
+    14→    14→ */
+    15→    15→
+    16→    16→import { OBSTACLES, WORLD_H, WORLD_W } from "@/lib/sim/constants";
+    17→    17→import type { AABB } from "@/lib/sim/types";
+    18→    18→import { TILT } from "./characters";
+    19→    19→
+    20→    20→// ------------------------------------------------------------------ helpers
+    21→    21→
+    22→    22→/** Deterministic 32-bit RNG (mulberry32). */
+    23→    23→function rng32(seed: number): () => number {
+    24→    24→  let a = seed >>> 0;
+    25→    25→  return () => {
+    26→    26→    a = (a + 0x6d2b79f5) >>> 0;
+    27→    27→    let t = a;
+    28→    28→    t = Math.imul(t ^ (t >>> 15), t | 1);
+    29→    29→    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    30→    30→    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    31→    31→  };
+    32→    32→}
+    33→    33→
+    34→    34→function makeCanvas(w: number, h: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
+    35→    35→  const c = document.createElement("canvas");
+    36→    36→  c.width = w;
+    37→    37→  c.height = h;
+    38→    38→  const ctx = c.getContext("2d");
+    39→    39→  if (!ctx) throw new Error("2D context unavailable");
+    40→    40→  return [c, ctx];
+    41→    41→}
+    42→    42→
+    43→    43→/** Floor-space y → ground-canvas local y (the baked ground canvas starts at the horizon). */
+    44→    44→function localY(worldY: number): number {
+    45→    45→  return worldY * TILT;
+    46→    46→}
+    47→    47→
+    48→    48→// ------------------------------------------------------------------- palette
+    49→    49→
+    50→    50→const C = {
+    51→    51→  skyTop: "#26201d",
+    52→    52→  skyMid: "#6e4a33",
+    53→    53→  skyGlow: "#c9894e",
+    54→    54→  skySun: "#ffe9bb",
+    55→    55→  cloud: "#8a7462",
+    56→    56→  skylineFar: "#4a3b31",
+    57→    57→  skylineNear: "#332a25",
+    58→    58→  grassFar: "#5c5e46",
+    59→    59→  grassMid: "#4c5039",
+    60→    60→  grassNear: "#3b402d",
+    61→    61→  dirt: "#6b5a42",
+    62→    62→  dirtLight: "#7d6c52",
+    63→    63→  path: "#8a7758",
+    64→    64→  road: "#43444a",
+    65→    65→  roadEdge: "#5a5b60",
+    66→    66→  roadDash: "#9a947e",
+    67→    67→  woodDark: "#4a3a2a",
+    68→    68→  wood: "#6b5138",
+    69→    69→  woodLight: "#836546",
+    70→    70→  brick: "#7a4a38",
+    71→    71→  brickDark: "#5e382c",
+    72→    72→  brickLight: "#8a5a44",
+    73→    73→  mortar: "#4a3028",
+    74→    74→  plaster: "#b3a489",
+    75→    75→  plasterDark: "#8f8270",
+    76→    76→  plasterLight: "#c4b69c",
+    77→    77→  tin: "#7a8288",
+    78→    78→  tinDark: "#5c6368",
+    79→    79→  rust: "#7a5c48",
+    80→    80→  leaf: "#425632",
+    81→    81→  leafLight: "#587441",
+    82→    82→  leafDark: "#32421f",
+    83→    83→  deadWood: "#4a3e33",
+    84→    84→  shadow: "rgba(10,12,8,0.42)",
+    85→    85→} as const;
+    86→    86→
+    87→    87→// ------------------------------------------------------------------- layout
+    88→    88→
+    89→    89→/** Screen-space horizon line (top of the floor plane). */
+    90→    90→export const ENV_HORIZON = 238;
+    91→    91→const GROUND_H = Math.ceil(WORLD_H * TILT); // 522
+    92→    92→
+    93→    93→/** A no-collision scenery prop, depth-sorted with fighters by floor y. */
+    94→    94→export interface Decor {
+    95→    95→  kind: "tree" | "bush" | "rock";
+    96→    96→  x: number;
+    97→    97→  y: number; // floor space
+    98→    98→  scale: number;
+    99→    99→  variant: number;
+   100→   100→  dead: boolean;
+   101→   101→}
+   102→   102→
+   103→   103→/** Hand-placed props — kept clear of cover footprints and spawn points. */
+   104→   104→export const DECOR: readonly Decor[] = [
+   105→   105→  { kind: "tree", x: 520, y: 118, scale: 1.06, variant: 0, dead: true },
+   106→   106→  { kind: "tree", x: 62, y: 214, scale: 1.0, variant: 1, dead: false },
+   107→   107→  { kind: "tree", x: 1516, y: 168, scale: 1.12, variant: 2, dead: false },
+   108→   108→  { kind: "tree", x: 622, y: 664, scale: 0.95, variant: 3, dead: false },
+   109→   109→  { kind: "tree", x: 1022, y: 636, scale: 1.02, variant: 4, dead: true },
+   110→   110→  { kind: "tree", x: 1402, y: 556, scale: 1.1, variant: 5, dead: false },
+   111→   111→  { kind: "tree", x: 352, y: 566, scale: 0.92, variant: 6, dead: false },
+   112→   112→  { kind: "tree", x: 758, y: 236, scale: 1.0, variant: 7, dead: false },
+   113→   113→  { kind: "bush", x: 252, y: 322, scale: 1.0, variant: 0, dead: false },
+   114→   114→  { kind: "bush", x: 902, y: 204, scale: 0.9, variant: 1, dead: false },
+   115→   115→  { kind: "bush", x: 1448, y: 700, scale: 1.0, variant: 2, dead: false },
+   116→   116→  { kind: "bush", x: 552, y: 798, scale: 0.85, variant: 3, dead: false },
+   117→   117→  { kind: "bush", x: 1252, y: 306, scale: 1.05, variant: 4, dead: false },
+   118→   118→  { kind: "bush", x: 82, y: 622, scale: 0.95, variant: 5, dead: false },
+   119→   119→  { kind: "rock", x: 482, y: 424, scale: 1.0, variant: 0, dead: false },
+   120→   120→  { kind: "rock", x: 1102, y: 762, scale: 1.1, variant: 1, dead: false },
+   121→   121→  { kind: "rock", x: 62, y: 862, scale: 0.9, variant: 2, dead: false },
+   122→   122→  { kind: "rock", x: 1556, y: 402, scale: 0.95, variant: 3, dead: false },
+   123→   123→  { kind: "rock", x: 872, y: 566, scale: 0.8, variant: 4, dead: false },
+   124→   124→] as const;
+   125→   125→
+   126→   126→// -------------------------------------------------------------- baked caches
+   127→   127→
+   128→   128→interface Baked {
+   129→   129→  sky: HTMLCanvasElement;
+   130→   130→  ground: HTMLCanvasElement;
+   131→   131→  structures: HTMLCanvasElement[]; // one per OBSTACLES entry
+   132→   132→}
+   133→   133→let baked: Baked | null = null;
+   134→   134→
+   135→   135→function getBaked(): Baked {
+   136→   136→  if (baked) return baked;
+   137→   137→  baked = {
+   138→   138→    sky: bakeSky(),
+   139→   139→    ground: bakeGround(),
+   140→   140→    structures: OBSTACLES.map((_, i) => bakeStructure(i)),
+   141→   141→  };
+   142→   142→  return baked;
+   143→   143→}
+   144→   144→
+   145→   145→// ----------------------------------------------------------------------- sky
+   146→   146→
+   147→   147→function bakeSky(): HTMLCanvasElement {
+   148→   148→  const [c, ctx] = makeCanvas(WORLD_W, ENV_HORIZON);
+   149→   149→  const W = WORLD_W;
+   150→   150→  const H = ENV_HORIZON;
+   151→   151→
+   152→   152→  // Dusk gradient.
+   153→   153→  const g = ctx.createLinearGradient(0, 0, 0, H);
+   154→   154→  g.addColorStop(0, C.skyTop);
+   155→   155→  g.addColorStop(0.45, "#4e3a2e");
+   156→   156→  g.addColorStop(0.78, C.skyMid);
+   157→   157→  g.addColorStop(1, C.skyGlow);
+   158→   158→  ctx.fillStyle = g;
+   159→   159→  ctx.fillRect(0, 0, W, H);
+   160→   160→
+   161→   161→  // Low sun with a soft halo.
+   162→   162→  const sunX = 1160;
+   163→   163→  const sunY = 168;
+   164→   164→  const halo = ctx.createRadialGradient(sunX, sunY, 8, sunX, sunY, 190);
+   165→   165→  halo.addColorStop(0, "rgba(255,233,187,0.85)");
+   166→   166→  halo.addColorStop(0.25, "rgba(240,190,120,0.38)");
+   167→   167→  halo.addColorStop(1, "rgba(240,190,120,0)");
+   168→   168→  ctx.fillStyle = halo;
+   169→   169→  ctx.fillRect(sunX - 200, sunY - 200, 400, 400);
+   170→   170→  ctx.fillStyle = C.skySun;
+   171→   171→  ctx.beginPath();
+   172→   172→  ctx.arc(sunX, sunY, 26, 0, Math.PI * 2);
+   173→   173→  ctx.fill();
+   174→   174→
+   175→   175→  const rand = rng32(0xC0FFEE);
+   176→   176→
+   177→   177→  // ---- far skyline: derelict society towers, half-demolished --------------
+   178→   178→  const drawBlock = (
+   179→   179→    bx: number, bw: number, bh: number, color: string, seed: number,
+   180→   180→  ): void => {
+   181→   181→    const r = rng32(seed);
+   182→   182→    const top = H - bh;
+   183→   183→    ctx.fillStyle = color;
+   184→   184→    ctx.fillRect(bx, top, bw, bh);
+   185→   185→    // Broken roofline — nibble the parapet.
+   186→   186→    ctx.fillStyle = C.skyTop;
+   187→   187→    let nx = bx;
+   188→   188→    while (nx < bx + bw) {
+   189→   189→      if (r() < 0.55) {
+   190→   190→        const nw = 6 + r() * 16;
+   191→   191→        const nd = 4 + r() * 10;
+   192→   192→        ctx.fillRect(nx, top, nw, nd);
+   193→   193→        nx += nw;
+   194→   194→      } else nx += 8 + r() * 20;
+   195→   195→    }
+   196→   196→    // Water tank on some roofs.
+   197→   197→    if (r() < 0.5) {
+   198→   198→      const tx = bx + 8 + r() * (bw - 26);
+   199→   199→      ctx.fillStyle = color;
+   200→   200→      ctx.fillRect(tx, top - 12, 14, 12);
+   201→   201→      ctx.fillRect(tx - 2, top - 14, 18, 3);
+   202→   202→    }
+   203→   203→    // A few faint warm windows (most abandoned, some still lit).
+   204→   204→    for (let wy = top + 10; wy < H - 8; wy += 14) {
+   205→   205→      for (let wx = bx + 6; wx < bx + bw - 8; wx += 12) {
+   206→   206→        const lit = r();
+   207→   207→        if (lit < 0.06) ctx.fillStyle = "rgba(255,190,110,0.30)";
+   208→   208→        else if (lit < 0.2) ctx.fillStyle = "rgba(0,0,0,0.35)";
+   209→   209→        else continue;
+   210→   210→        ctx.fillRect(wx, wy, 6, 7);
+   211→   211→      }
+   212→   212→    }
+   213→   213→  };
+   214→   214→
+   215→   215→  // Far band (behind, lighter).
+   216→   216→  let x = -20;
+   217→   217→  let i = 0;
+   218→   218→  while (x < W + 20) {
+   219→   219→    const bw = 46 + rand() * 90;
+   220→   220→    drawBlock(x, bw, 52 + rand() * 84, C.skylineFar, 0x5157 + i * 97);
+   221→   221→    x += bw + 4 + rand() * 26;
+   222→   222→    i++;
+   223→   223→  }
+   224→   224→  // Near band (darker, sparser, taller).
+   225→   225→  x = 30;
+   226→   226→  i = 0;
+   227→   227→  while (x < W + 20) {
+   228→   228→    const bw = 60 + rand() * 110;
+   229→   229→    drawBlock(x, bw, 30 + rand() * 58, C.skylineNear, 0x9A21 + i * 131);
+   230→   230→    x += bw + 30 + rand() * 90;
+   231→   231→    i++;
+   232→   232→  }
+   233→   233→
+   234→   234→  // Power poles with sagging wires across the horizon.
+   235→   235→  const poles = [90, 420, 760, 1080, 1420];
+   236→   236→  ctx.strokeStyle = "#241d19";
+   237→   237→  ctx.lineWidth = 3;
+   238→   238→  for (const px of poles) {
+   239→   239→    const ph = 34 + (px % 37);
+   240→   240→    ctx.beginPath();
+   241→   241→    ctx.moveTo(px, H);
+   242→   242→    ctx.lineTo(px, H - ph);
+   243→   243→    ctx.moveTo(px - 9, H - ph + 7);
+   244→   244→    ctx.lineTo(px + 9, H - ph + 7);
+   245→   245→    ctx.stroke();
+   246→   246→  }
+   247→   247→  ctx.strokeStyle = "rgba(30,24,20,0.8)";
+   248→   248→  ctx.lineWidth = 1.2;
+   249→   249→  ctx.beginPath();
+   250→   250→  for (let p = 0; p < poles.length - 1; p++) {
+   251→   251→    const x1 = poles[p];
+   252→   252→    const x2 = poles[p + 1];
+   253→   253→    const y1 = H - (34 + (x1 % 37)) + 7;
+   254→   254→    const y2 = H - (34 + (x2 % 37)) + 7;
+   255→   255→    ctx.moveTo(x1, y1);
+   256→   256→    ctx.quadraticCurveTo((x1 + x2) / 2, Math.max(y1, y2) + 14, x2, y2);
+   257→   257→  }
+   258→   258→  ctx.stroke();
+   259→   259→
+   260→   260→  // Dead scrub on the horizon line.
+   261→   261→  for (let sx = 0; sx < W; sx += 14) {
+   262→   262→    if (rand() < 0.4) continue;
+   263→   263→    const h = 3 + rand() * 9;
+   264→   264→    ctx.strokeStyle = "rgba(40,32,24,0.7)";
+   265→   265→    ctx.lineWidth = 1.4;
+   266→   266→    ctx.beginPath();
+   267→   267→    ctx.moveTo(sx, H);
+   268→   268→    ctx.lineTo(sx + (rand() - 0.5) * 8, H - h);
+   269→   269→    ctx.stroke();
+   270→   270→  }
+   271→   271→  return c;
+   272→   272→}
+   273→   273→
+   274→   274→// -------------------------------------------------------------------- ground
+   275→   275→
+   276→   276→function bakeGround(): HTMLCanvasElement {
+   277→   277→  const [c, ctx] = makeCanvas(WORLD_W, GROUND_H);
+   278→   278→  const W = WORLD_W;
+   279→   279→  const H = GROUND_H;
+   280→   280→  const rand = rng32(0x600D13);
+   281→   281→
+   282→   282→  // Dry park grass — slightly darker toward the camera.
+   283→   283→  const g = ctx.createLinearGradient(0, 0, 0, H);
+   284→   284→  g.addColorStop(0, C.grassFar);
+   285→   285→  g.addColorStop(0.4, C.grassMid);
+   286→   286→  g.addColorStop(1, C.grassNear);
+   287→   287→  ctx.fillStyle = g;
+   288→   288→  ctx.fillRect(0, 0, W, H);
+   289→   289→
+   290→   290→  // Large soft tonal patches (mown / dried out areas).
+   291→   291→  for (let p = 0; p < 34; p++) {
+   292→   292→    const px = rand() * W;
+   293→   293→    const py = rand() * H;
+   294→   294→    const pr = 60 + rand() * 150;
+   295→   295→    const dark = rand() < 0.5;
+   296→   296→    const pg = ctx.createRadialGradient(px, py, pr * 0.2, px, py, pr);
+   297→   297→    pg.addColorStop(0, dark ? "rgba(38,44,28,0.30)" : "rgba(112,112,72,0.22)");
+   298→   298→    pg.addColorStop(1, "rgba(0,0,0,0)");
+   299→   299→    ctx.fillStyle = pg;
+   300→   300→    ctx.beginPath();
+   301→   301→    ctx.ellipse(px, py, pr, pr * 0.55, 0, 0, Math.PI * 2);
+   302→   302→    ctx.fill();
+   303→   303→  }
+   304→   304→
+   305→   305→  // Dirt worn patches.
+   306→   306→  for (let p = 0; p < 22; p++) {
+   307→   307→    const px = rand() * W;
+   308→   308→    const py = rand() * H;
+   309→   309→    const pr = 24 + rand() * 60;
+   310→   310→    ctx.fillStyle = "rgba(107,90,66,0.5)";
+   311→   311→    ctx.beginPath();
+   312→   312→    ctx.ellipse(px, py, pr, pr * 0.5, rand() * Math.PI, 0, Math.PI * 2);
+   313→   313→    ctx.fill();
+   314→   314→    ctx.fillStyle = "rgba(125,108,82,0.35)";
+   315→   315→    ctx.beginPath();
+   316→   316→    ctx.ellipse(px - pr * 0.15, py - pr * 0.1, pr * 0.6, pr * 0.3, 0, 0, Math.PI * 2);
+   317→   317→    ctx.fill();
+   318→   318→  }
+   319→   319→
+   320→   320→  // Cracked asphalt road band across the lower half.
+   321→   321→  const roadTop = localY(540);
+   322→   322→  const roadBot = localY(668);
+   323→   323→  ctx.fillStyle = C.road;
+   324→   324→  ctx.fillRect(0, roadTop, W, roadBot - roadTop);
+   325→   325→  // Edge wear.
+   326→   326→  ctx.fillStyle = C.roadEdge;
+   327→   327→  ctx.fillRect(0, roadTop, W, 4);
+   328→   328→  ctx.fillRect(0, roadBot - 4, W, 4);
+   329→   329→  ctx.fillStyle = "rgba(76,80,57,0.9)"; // grass creeping over the edges
+   330→   330→  for (let ex = 0; ex < W; ex += 10) {
+   331→   331→    if (rand() < 0.55) ctx.fillRect(ex, roadTop - 2 - rand() * 3, 5 + rand() * 6, 3);
+   332→   332→    if (rand() < 0.55) ctx.fillRect(ex, roadBot - 1 + rand() * 2, 5 + rand() * 6, 3);
+   333→   333→  }
+   334→   334→  // Faded center dashes.
+   335→   335→  ctx.fillStyle = C.roadDash;
+   336→   336→  for (let dx = 20; dx < W; dx += 120) {
+   337→   337→    ctx.globalAlpha = 0.35 + rand() * 0.3;
+   338→   338→    ctx.fillRect(dx, (roadTop + roadBot) / 2 - 3, 52, 5);
+   339→   339→  }
+   340→   340→  ctx.globalAlpha = 1;
+   341→   341→  // Potholes + tar patches + cracks.
+   342→   342→  for (let p = 0; p < 16; p++) {
+   343→   343→    const px = rand() * W;
+   344→   344→    const py = roadTop + 8 + rand() * (roadBot - roadTop - 16);
+   345→   345→    ctx.fillStyle = "rgba(24,26,28,0.55)";
+   346→   346→    ctx.beginPath();
+   347→   347→    ctx.ellipse(px, py, 7 + rand() * 16, 3 + rand() * 6, 0, 0, Math.PI * 2);
+   348→   348→    ctx.fill();
+   349→   349→  }
+   350→   350→  ctx.strokeStyle = "rgba(20,22,24,0.5)";
+   351→   351→  ctx.lineWidth = 1.2;
+   352→   352→  ctx.beginPath();
+   353→   353→  for (let k = 0; k < 26; k++) {
+   354→   354→    let cx = rand() * W;
+   355→   355→    let cy = roadTop + rand() * (roadBot - roadTop);
+   356→   356→    ctx.moveTo(cx, cy);
+   357→   357→    for (let s = 0; s < 4; s++) {
+   358→   358→      cx += (rand() - 0.5) * 34;
+   359→   359→      cy += (rand() - 0.5) * 12;
+   360→   360→      ctx.lineTo(cx, cy);
+   361→   361→    }
+   362→   362→  }
+   363→   363→  ctx.stroke();
+   364→   364→
+   365→   365→  // Dirt footpath: from the road up to the restaurant door, plus a rim path.
+   366→   366→  const pathW = 46;
+   367→   367→  const drawPath = (x0: number, y0: number, x1: number, y1: number): void => {
+   368→   368→    const steps = 22;
+   369→   369→    ctx.fillStyle = "rgba(138,119,88,0.85)";
+   370→   370→    for (let s = 0; s <= steps; s++) {
+   371→   371→      const t = s / steps;
+   372→   372→      const px = x0 + (x1 - x0) * t + Math.sin(t * 5) * 14;
+   373→   373→      const py = y0 + (y1 - y0) * t;
+   374→   374→      const w = pathW * (0.75 + 0.25 * Math.sin(t * 9));
+   375→   375→      ctx.beginPath();
+   376→   376→      ctx.ellipse(px, py, w / 2, (w / 2) * TILT * 0.9, 0, 0, Math.PI * 2);
+   377→   377→      ctx.fill();
+   378→   378→    }
+   379→   379→  };
+   380→   380→  drawPath(800, roadBot + 6, 800, localY(492)); // road → restaurant front
+   381→   381→  drawPath(120, localY(300), 380, localY(320)); // rim path upper-left
+   382→   382→  drawPath(1420, localY(320), 1560, localY(350));
+   383→   383→  drawPath(240, roadTop - 4, 500, localY(500)); // road → upper park
+   384→   384→  // Path pebbles.
+   385→   385→  for (let p = 0; p < 90; p++) {
+   386→   386→    const t = rand();
+   387→   387→    const px = 800 + Math.sin(t * 5) * 14 + (rand() - 0.5) * pathW;
+   388→   388→    const py = localY(492) + t * (roadBot + 6 - localY(492));
+   389→   389→    ctx.fillStyle = "rgba(160,144,116,0.5)";
+   390→   390→    ctx.fillRect(px, py, 2 + rand() * 2, 1.5);
+   391→   391→  }
+   392→   392→
+   393→   393→  // Grass tufts — three quick strokes each.
+   394→   394→  const tuftColors = ["#5a6440", "#6e7a4a", "#49542f", "#77824e"];
+   395→   395→  for (let t = 0; t < 620; t++) {
+   396→   396→    const px = rand() * W;
+   397→   397→    const py = rand() * H;
+   398→   398→    if (py > roadTop - 4 && py < roadBot + 4) continue;
+   399→   399→    ctx.strokeStyle = tuftColors[(rand() * tuftColors.length) | 0];
+   400→   400→    ctx.lineWidth = 1.3;
+   401→   401→    ctx.beginPath();
+   402→   402→    for (let b = 0; b < 3; b++) {
+   403→   403→      const bx = px + (b - 1) * 2.4;
+   404→   404→      ctx.moveTo(bx, py);
+   405→   405→      ctx.lineTo(bx + (rand() - 0.5) * 4, py - 4 - rand() * 6);
+   406→   406→    }
+   407→   407→    ctx.stroke();
+   408→   408→  }
+   409→   409→  // Fallen leaves / litter dots.
+   410→   410→  for (let t = 0; t < 240; t++) {
+   411→   411→    const px = rand() * W;
+   412→   412→    const py = rand() * H;
+   413→   413→    ctx.fillStyle = rand() < 0.5 ? "rgba(138,122,74,0.6)" : "rgba(90,84,52,0.55)";
+   414→   414→    ctx.fillRect(px, py, 2.4, 1.6);
+   415→   415→  }
+   416→   416→  // Small stones.
+   417→   417→  for (let t = 0; t < 120; t++) {
+   418→   418→    const px = rand() * W;
+   419→   419→    const py = rand() * H;
+   420→   420→    const s = 1.6 + rand() * 3.4;
+   421→   421→    ctx.fillStyle = "#6c675c";
+   422→   422→    ctx.beginPath();
+   423→   423→    ctx.ellipse(px, py, s, s * 0.62, 0, 0, Math.PI * 2);
+   424→   424→    ctx.fill();
+   425→   425→    ctx.fillStyle = "rgba(190,182,166,0.5)";
+   426→   426→    ctx.fillRect(px - s * 0.4, py - s * 0.5, s * 0.7, s * 0.3);
+   427→   427→  }
+   428→   428→
+   429→   429→  // Arena boundary: weathered concrete curb + short barrier posts.
+   430→   430→  ctx.fillStyle = "#57544c";
+   431→   431→  ctx.fillRect(0, 0, W, 5); // far curb (horizon edge)
+   432→   432→  ctx.fillRect(0, H - 6, W, 6); // near curb
+   433→   433→  ctx.fillStyle = "#454239";
+   434→   434→  for (let px = 8; px < W; px += 88) {
+   435→   435→    ctx.fillRect(px, H - 20, 7, 15); // near posts
+   436→   436→    ctx.fillStyle = "#6a675e";
+   437→   437→    ctx.fillRect(px + 1, H - 20, 2, 15);
+   438→   438→    ctx.fillStyle = "#454239";
+   439→   439→  }
+   440→   440→  // Chain-link fence hint along the horizon.
+   441→   441→  ctx.strokeStyle = "rgba(70,66,60,0.85)";
+   442→   442→  ctx.lineWidth = 1.6;
+   443→   443→  ctx.beginPath();
+   444→   444→  ctx.moveTo(0, 7);
+   445→   445→  ctx.lineTo(W, 7);
+   446→   446→  ctx.stroke();
+   447→   447→  ctx.strokeStyle = "rgba(90,86,78,0.5)";
+   448→   448→  ctx.lineWidth = 1;
+   449→   449→  ctx.beginPath();
+   450→   450→  for (let px = 0; px < W; px += 10) {
+   451→   451→    ctx.moveTo(px, 2);
+   452→   452→    ctx.lineTo(px + 6, 9);
+   453→   453→    ctx.moveTo(px + 6, 2);
+   454→   454→    ctx.lineTo(px, 9);
+   455→   455→  }
+   456→   456→  ctx.stroke();
+   457→   457→
+   458→   458→  // Corner vignette so the arena edges melt into the frame.
+   459→   459→  const vg = ctx.createRadialGradient(W / 2, H * 0.42, H * 0.4, W / 2, H * 0.5, H * 1.05);
+   460→   460→  vg.addColorStop(0, "rgba(0,0,0,0)");
+   461→   461→  vg.addColorStop(1, "rgba(8,10,6,0.34)");
+   462→   462→  ctx.fillStyle = vg;
+   463→   463→  ctx.fillRect(0, 0, W, H);
+   464→   464→  return c;
+   465→   465→}
+   466→   466→
+   467→   467→// ------------------------------------------------------- themed structures
+   468→   468→
+   469→   469→/**
+   470→   470→ * Visual heights (screen px) of each cover structure. Collision footprints
+   471→   471→ * stay exactly the PROTOCOL AABBs — height is presentation only.
+   472→   472→ */
+   473→   473→const STRUCT_HEIGHTS = [64, 64, 82, 118, 78];
+   474→   474→
+   475→   475→function brickWallFace(ctx: CanvasRenderingContext2D, w: number, h: number, seed: number): void {
+   476→   476→  const rand = rng32(seed);
+   477→   477→  // Course gradient.
+   478→   478→  const g = ctx.createLinearGradient(0, 0, 0, h);
+   479→   479→  g.addColorStop(0, "#6d4234");
+   480→   480→  g.addColorStop(1, "#4e2f26");
+   481→   481→  ctx.fillStyle = g;
+   482→   482→  ctx.fillRect(0, 0, w, h);
+   483→   483→  // Broken crown: nibble the top edge.
+   484→   484→  const nibbles: number[] = [];
+   485→   485→  let nx = 0;
+   486→   486→  while (nx < w) {
+   487→   487→    nibbles.push(nx);
+   488→   488→    nx += 12 + rand() * 22;
+   489→   489→  }
+   490→   490→  for (const bx of nibbles) {
+   491→   491→    const bh = 3 + rand() * 12;
+   492→   492→    ctx.fillStyle = "#20160f";
+   493→   493→    ctx.fillRect(bx, 0, 6 + rand() * 12, bh);
+   494→   494→  }
+   495→   495→  // Brick courses.
+   496→   496→  const rowH = 11;
+   497→   497→  const brickW = 24;
+   498→   498→  for (let ry = 0; ry * rowH < h; ry++) {
+   499→   499→    const off = (ry % 2) * (brickW / 2);
+   500→   500→    for (let bx = -brickW; bx < w; bx += brickW) {
+   501→   501→      const tint = rand();
+   502→   502→      if (tint < 0.14) continue; // missing brick (hole)
+   503→   503→      ctx.fillStyle =
+   504→   504→        tint < 0.38 ? C.brickDark : tint < 0.72 ? C.brick : tint < 0.9 ? C.brickLight : "#6a4030";
+   505→   505→      ctx.fillRect(bx + off + 1.2, ry * rowH + 1.2, brickW - 2.4, rowH - 2.4);
+   506→   506→      if (tint > 0.82) {
+   507→   507→        ctx.fillStyle = "rgba(255,220,190,0.12)";
+   508→   508→        ctx.fillRect(bx + off + 1.2, ry * rowH + 1.2, brickW - 2.4, 2);
+   509→   509→      }
+   510→   510→    }
+   511→   511→  }
+   512→   512→  // Holes revealing dark interior.
+   513→   513→  for (let k = 0; k < 4; k++) {
+   514→   514→    const hx = rand() * (w - 30) + 8;
+   515→   515→    const hy = 8 + rand() * (h - 26);
+   516→   516→    ctx.fillStyle = "#170f0b";
+   517→   517→    ctx.beginPath();
+   518→   518→    ctx.ellipse(hx, hy, 7 + rand() * 9, 5 + rand() * 6, 0, 0, Math.PI * 2);
+   519→   519→    ctx.fill();
+   520→   520→  }
+   521→   521→  // Moss + grime at the base.
+   522→   522→  const mg = ctx.createLinearGradient(0, h * 0.55, 0, h);
+   523→   523→  mg.addColorStop(0, "rgba(60,70,40,0)");
+   524→   524→  mg.addColorStop(1, "rgba(52,64,36,0.55)");
+   525→   525→  ctx.fillStyle = mg;
+   526→   526→  ctx.fillRect(0, h * 0.55, w, h * 0.45);
+   527→   527→  for (let k = 0; k < 8; k++) {
+   528→   528→    const mx = rand() * w;
+   529→   529→    ctx.fillStyle = "rgba(74,86,48,0.5)";
+   530→   530→    ctx.beginPath();
+   531→   531→    ctx.ellipse(mx, h - 4 - rand() * 10, 6 + rand() * 10, 3 + rand() * 4, 0, 0, Math.PI * 2);
+   532→   532→    ctx.fill();
+   533→   533→  }
+   534→   534→  // Painted faded stripe (society boundary marker).
+   535→   535→  ctx.fillStyle = "rgba(214,196,150,0.16)";
+   536→   536→  ctx.fillRect(0, h * 0.34, w, 7);
+   537→   537→}
+   538→   538→
+   539→   539→function restaurantFace(ctx: CanvasRenderingContext2D, w: number, h: number, seed: number): void {
+   540→   540→  const rand = rng32(seed);
+   541→   541→  // Weathered plaster.
+   542→   542→  const g = ctx.createLinearGradient(0, 0, 0, h);
+   543→   543→  g.addColorStop(0, C.plasterLight);
+   544→   544→  g.addColorStop(0.55, C.plaster);
+   545→   545→  g.addColorStop(1, "#93866e");
+   546→   546→  ctx.fillStyle = g;
+   547→   547→  ctx.fillRect(0, 0, w, h);
+   548→   548→  // Stain streaks.
+   549→   549→  for (let k = 0; k < 14; k++) {
+   550→   550→    const sx = rand() * w;
+   551→   551→    ctx.fillStyle = `rgba(70,60,44,${0.08 + rand() * 0.12})`;
+   552→   552→    ctx.fillRect(sx, rand() * h * 0.3, 2 + rand() * 6, h * (0.3 + rand() * 0.5));
+   553→   553→  }
+   554→   554→  // Cracks.
+   555→   555→  ctx.strokeStyle = "rgba(60,50,40,0.55)";
+   556→   556→  ctx.lineWidth = 1.1;
+   557→   557→  ctx.beginPath();
+   558→   558→  for (let k = 0; k < 5; k++) {
+   559→   559→    let cx = rand() * w;
+   560→   560→    let cy = rand() * h * 0.4;
+   561→   561→    ctx.moveTo(cx, cy);
+   562→   562→    for (let s = 0; s < 5; s++) {
+   563→   563→      cx += (rand() - 0.5) * 22;
+   564→   564→      cy += 8 + rand() * 14;
+   565→   565→      ctx.lineTo(cx, cy);
+   566→   566→    }
+   567→   567→  }
+   568→   568→  ctx.stroke();
+   569→   569→
+   570→   570→  const signH = 22;
+   571→   571→  const signY = 8;
+   572→   572→  // Signboard.
+   573→   573→  ctx.fillStyle = "#2e2a26";
+   574→   574→  ctx.fillRect(6, signY, w - 12, signH);
+   575→   575→  ctx.strokeStyle = "rgba(0,0,0,0.6)";
+   576→   576→  ctx.lineWidth = 2;
+   577→   577→  ctx.strokeRect(6, signY, w - 12, signH);
+   578→   578→  // Dead tube lights along the sign.
+   579→   579→  for (let k = 0; k < 6; k++) {
+   580→   580→    ctx.fillStyle = "rgba(230,220,190,0.25)";
+   581→   581→    ctx.fillRect(14 + k * ((w - 28) / 6), signY - 4, (w - 28) / 6 - 8, 2.5);
+   582→   582→  }
+   583→   583→  // Faded name.
+   584→   584→  ctx.fillStyle = "rgba(216,201,160,0.8)";
+   585→   585→  ctx.font = "700 13px 'Courier New', monospace";
+   586→   586→  ctx.textAlign = "center";
+   587→   587→  ctx.fillText("★ STARLIGHT RESTAURANT ★", w / 2, signY + 15.5);
+   588→   588→  ctx.fillStyle = "rgba(40,34,28,0.35)";
+   589→   589→  ctx.fillText("★ STARLIGHT RESTAURANT ★", w / 2 + 1, signY + 16.5);
+   590→   590→
+   591→   591→  // Torn striped awning under the sign.
+   592→   592→  const awnY = signY + signH + 3;
+   593→   593→  const stripeW = 16;
+   594→   594→  for (let sx = 6; sx < w - 6; sx += stripeW) {
+   595→   595→    const torn = rand();
+   596→   596→    ctx.fillStyle = ((sx / stripeW) | 0) % 2 === 0 ? "#9a4a3c" : "#cbb89a";
+   597→   597→    if (torn < 0.18) {
+   598→   598→      // ripped chunk missing
+   599→   599→      ctx.save();
+   600→   600→      ctx.beginPath();
+   601→   601→      ctx.rect(sx, awnY, stripeW, 12);
+   602→   602→      ctx.clip();
+   603→   603→      ctx.fillRect(sx, awnY + 4 + rand() * 4, stripeW, 8);
+   604→   604→      ctx.restore();
+   605→   605→    } else {
+   606→   606→      ctx.fillRect(sx, awnY, stripeW, 13);
+   607→   607→      ctx.fillStyle = "rgba(0,0,0,0.22)";
+   608→   608→      ctx.fillRect(sx, awnY + 10, stripeW, 3);
+   609→   609→    }
+   610→   610→  }
+   611→   611→  ctx.fillStyle = "rgba(40,30,24,0.35)";
+   612→   612→  ctx.fillRect(6, awnY + 13, w - 12, 2.5);
+   613→   613→
+   614→   614→  // Boarded window (left) + shuttered door (right).
+   615→   615→  const winX = 20;
+   616→   616→  const winY = awnY + 22;
+   617→   617→  const winW = 72;
+   618→   618→  const winH = 34;
+   619→   619→  ctx.fillStyle = "#1c1713";
+   620→   620→  ctx.fillRect(winX, winY, winW, winH);
+   621→   621→  ctx.strokeStyle = "#54402f";
+   622→   622→  ctx.lineWidth = 3;
+   623→   623→  ctx.strokeRect(winX, winY, winW, winH);
+   624→   624→  for (let p = 0; p < 4; p++) {
+   625→   625→    ctx.fillStyle = p % 2 ? "#5e4a38" : "#6d5741";
+   626→   626→    ctx.save();
+   627→   627→    ctx.translate(winX, winY + 3 + p * 8);
+   628→   628→    ctx.rotate((rand() - 0.5) * 0.06);
+   629→   629→    ctx.fillRect(0, 0, winW, 6);
+   630→   630→    ctx.restore();
+   631→   631→  }
+   632→   632→  const doorX = w - 66;
+   633→   633→  const doorW = 48;
+   634→   634→  const doorY = winY - 4;
+   635→   635→  const doorH = h - doorY - 6;
+   636→   636→  // Rusted roller shutter.
+   637→   637→  const sg = ctx.createLinearGradient(doorX, 0, doorX + doorW, 0);
+   638→   638→  sg.addColorStop(0, "#6a6e74");
+   639→   639→  sg.addColorStop(0.5, "#7d8288");
+   640→   640→  sg.addColorStop(1, "#5e6268");
+   641→   641→  ctx.fillStyle = sg;
+   642→   642→  ctx.fillRect(doorX, doorY, doorW, doorH);
+   643→   643→  ctx.strokeStyle = "rgba(40,42,46,0.8)";
+   644→   644→  ctx.lineWidth = 1;
+   645→   645→  ctx.beginPath();
+   646→   646→  for (let ry = doorY + 4; ry < doorY + doorH; ry += 5) {
+   647→   647→    ctx.moveTo(doorX, ry);
+   648→   648→    ctx.lineTo(doorX + doorW, ry);
+   649→   649→  }
+   650→   650→  ctx.stroke();
+   651→   651→  // Rust streaks on the shutter.
+   652→   652→  for (let k = 0; k < 6; k++) {
+   653→   653→    ctx.fillStyle = `rgba(122,74,48,${0.25 + rand() * 0.3})`;
+   654→   654→    ctx.fillRect(doorX + rand() * doorW, doorY + rand() * doorH * 0.5, 3 + rand() * 5, 8 + rand() * 20);
+   655→   655→  }
+   656→   656→  // Padlock + handle plate.
+   657→   657→  ctx.fillStyle = "#3a3a3c";
+   658→   658→  ctx.fillRect(doorX + doorW * 0.5 - 5, doorY + doorH * 0.62, 10, 12);
+   659→   659→  // Middle pillar between window and door.
+   660→   660→  ctx.fillStyle = "rgba(0,0,0,0.08)";
+   661→   661→  ctx.fillRect(winX + winW + 8, winY - 8, 6, h - winY);
+   662→   662→
+   663→   663→  // Base: grime + step slab.
+   664→   664→  const bg = ctx.createLinearGradient(0, h * 0.75, 0, h);
+   665→   665→  bg.addColorStop(0, "rgba(40,36,28,0)");
+   666→   666→  bg.addColorStop(1, "rgba(40,36,28,0.5)");
+   667→   667→  ctx.fillStyle = bg;
+   668→   668→  ctx.fillRect(0, h * 0.75, w, h * 0.25);
+   669→   669→  ctx.fillStyle = "#8f887a";
+   670→   670→  ctx.fillRect(8, h - 7, w - 16, 7);
+   671→   671→  ctx.fillStyle = "rgba(0,0,0,0.3)";
+   672→   672→  ctx.fillRect(8, h - 2.5, w - 16, 2.5);
+   673→   673→
+   674→   674→  // Vandal tags (subtle).
+   675→   675→  ctx.strokeStyle = "rgba(160,60,60,0.28)";
+   676→   676→  ctx.lineWidth = 2.4;
+   677→   677→  ctx.beginPath();
+   678→   678→  ctx.moveTo(w * 0.42, winY + 6);
+   679→   679→  ctx.quadraticCurveTo(w * 0.47, winY - 8, w * 0.53, winY + 4);
+   680→   680→  ctx.stroke();
+   681→   681→}
+   682→   682→
+   683→   683→function kioskFace(ctx: CanvasRenderingContext2D, w: number, h: number, seed: number): void {
+   684→   684→  const rand = rng32(seed);
+   685→   685→  // Wooden plank front.
+   686→   686→  ctx.fillStyle = C.wood;
+   687→   687→  ctx.fillRect(0, 0, w, h);
+   688→   688→  const plankH = 12;
+   689→   689→  for (let py = 0; py < h; py += plankH) {
+   690→   690→    ctx.fillStyle = rand() < 0.5 ? C.wood : rand() < 0.5 ? C.woodLight : "#5f4832";
+   691→   691→    ctx.fillRect(0, py, w, plankH - 1.4);
+   692→   692→    ctx.fillStyle = "rgba(0,0,0,0.35)";
+   693→   693→    ctx.fillRect(0, py + plankH - 1.4, w, 1.4);
+   694→   694→    // Knots.
+   695→   695→    if (rand() < 0.4) {
+   696→   696→      ctx.fillStyle = "rgba(58,44,30,0.7)";
+   697→   697→      ctx.beginPath();
+   698→   698→      ctx.ellipse(rand() * w, py + plankH / 2, 2.4, 1.6, 0, 0, Math.PI * 2);
+   699→   699→      ctx.fill();
+   700→   700→    }
+   701→   701→  }
+   702→   702→  // Open counter: dark opening with shelf.
+   703→   703→  const cX = w * 0.3;
+   704→   704→  const cW = w * 0.4;
+   705→   705→  const cY = 14;
+   706→   706→  const cH = h - cY - 12;
+   707→   707→  ctx.fillStyle = "#181410";
+   708→   708→  ctx.fillRect(cX, cY, cW, cH);
+   709→   709→  ctx.fillStyle = "#241d16";
+   710→   710→  ctx.fillRect(cX - 6, cY + cH * 0.45, cW + 12, 5); // shelf
+   711→   711→  // Hanging strips (old plastic curtain).
+   712→   712→  for (let sx = cX + 3; sx < cX + cW - 3; sx += 7) {
+   713→   713→    ctx.fillStyle = `rgba(150,150,140,${0.16 + rand() * 0.14})`;
+   714→   714→    ctx.fillRect(sx, cY, 3, cH * (0.4 + rand() * 0.5));
+   715→   715→  }
+   716→   716→  // Torn tarp over the right corner.
+   717→   717→  ctx.fillStyle = "rgba(138,142,150,0.85)";
+   718→   718→  ctx.beginPath();
+   719→   719→  ctx.moveTo(w - 46, 8);
+   720→   720→  ctx.lineTo(w - 6, 14);
+   721→   721→  ctx.lineTo(w - 12, 34 + rand() * 10);
+   722→   722→  ctx.lineTo(w - 40, 26);
+   723→   723→  ctx.closePath();
+   724→   724→  ctx.fill();
+   725→   725→  ctx.fillStyle = "rgba(70,74,80,0.6)";
+   726→   726→  ctx.fillRect(w - 34, 12, 18, 3);
+   727→   727→  // Grime + moss base.
+   728→   728→  const bg = ctx.createLinearGradient(0, h * 0.7, 0, h);
+   729→   729→  bg.addColorStop(0, "rgba(30,30,20,0)");
+   730→   730→  bg.addColorStop(1, "rgba(30,34,18,0.5)");
+   731→   731→  ctx.fillStyle = bg;
+   732→   732→  ctx.fillRect(0, h * 0.7, w, h * 0.3);
+   733→   733→  // Crates beside the counter.
+   734→   734→  ctx.fillStyle = "#7a5c3a";
+   735→   735→  ctx.fillRect(w - 34, h - 20, 22, 18);
+   736→   736→  ctx.strokeStyle = "rgba(40,28,16,0.8)";
+   737→   737→  ctx.lineWidth = 1.6;
+   738→   738→  ctx.strokeRect(w - 34, h - 20, 22, 18);
+   739→   739→  ctx.beginPath();
+   740→   740→  ctx.moveTo(w - 34, h - 20);
+   741→   741→  ctx.lineTo(w - 12, h - 2);
+   742→   742→  ctx.moveTo(w - 12, h - 20);
+   743→   743→  ctx.lineTo(w - 34, h - 2);
+   744→   744→  ctx.stroke();
+   745→   745→  ctx.fillStyle = "#6a4e30";
+   746→   746→  ctx.fillRect(w - 30, h - 34, 18, 14);
+   747→   747→  ctx.strokeRect(w - 30, h - 34, 18, 14);
+   748→   748→}
+   749→   749→
+   750→   750→function cabinFace(ctx: CanvasRenderingContext2D, w: number, h: number, seed: number): void {
+   751→   751→  const rand = rng32(seed);
+   752→   752→  // Aging plaster cabin.
+   753→   753→  const g = ctx.createLinearGradient(0, 0, 0, h);
+   754→   754→  g.addColorStop(0, "#9a9282");
+   755→   755→  g.addColorStop(1, "#6e675c");
+   756→   756→  ctx.fillStyle = g;
+   757→   757→  ctx.fillRect(0, 0, w, h);
+   758→   758→  // Plaster patches falling off → brick underneath.
+   759→   759→  for (let k = 0; k < 7; k++) {
+   760→   760→    const px = rand() * (w - 26);
+   761→   761→    const py = h * 0.3 + rand() * h * 0.55;
+   762→   762→    ctx.fillStyle = C.brickDark;
+   763→   763→    ctx.fillRect(px, py, 12 + rand() * 22, 8 + rand() * 12);
+   764→   764→    ctx.strokeStyle = "rgba(0,0,0,0.3)";
+   765→   765→    ctx.lineWidth = 1;
+   766→   766→    ctx.strokeRect(px, py, 12 + rand() * 22, 8 + rand() * 12);
+   767→   767→  }
+   768→   768→  // Broken window with shards.
+   769→   769→  const wx = w * 0.22;
+   770→   770→  const wy = 12;
+   771→   771→  const ww = 52;
+   772→   772→  const wh = 30;
+   773→   773→  ctx.fillStyle = "#141a1e";
+   774→   774→  ctx.fillRect(wx, wy, ww, wh);
+   775→   775→  ctx.strokeStyle = "#4a4238";
+   776→   776→  ctx.lineWidth = 3;
+   777→   777→  ctx.strokeRect(wx, wy, ww, wh);
+   778→   778→  ctx.strokeStyle = "rgba(170,200,210,0.4)";
+   779→   779→  ctx.lineWidth = 1.4;
+   780→   780→  ctx.beginPath();
+   781→   781→  for (let k = 0; k < 5; k++) {
+   782→   782→    const sx = wx + 4 + rand() * (ww - 8);
+   783→   783→    const sy = wy + 2 + rand() * 8;
+   784→   784→    ctx.moveTo(sx, sy);
+   785→   785→    ctx.lineTo(sx + (rand() - 0.5) * 8, sy + 6 + rand() * 10);
+   786→   786→  }
+   787→   787→  ctx.stroke();
+   788→   788→  // Door.
+   789→   789→  ctx.fillStyle = "#4e4438";
+   790→   790→  ctx.fillRect(w - 60, wy - 2, 42, h - wy + 2);
+   791→   791→  ctx.strokeStyle = "rgba(0,0,0,0.4)";
+   792→   792→  ctx.strokeRect(w - 60, wy - 2, 42, h - wy + 2);
+   793→   793→  // Rusted tin roof strip along the top.
+   794→   794→  ctx.fillStyle = C.rust;
+   795→   795→  ctx.fillRect(0, 0, w, 7);
+   796→   796→  ctx.fillStyle = "rgba(0,0,0,0.3)";
+   797→   797→  ctx.fillRect(0, 5, w, 2);
+   798→   798→  // Barrier pole leaning against the wall.
+   799→   799→  ctx.strokeStyle = "#c8c0ae";
+   800→   800→  ctx.lineWidth = 4;
+   801→   801→  ctx.beginPath();
+   802→   802→  ctx.moveTo(10, h - 2);
+   803→   803→  ctx.lineTo(34, 6);
+   804→   804→  ctx.stroke();
+   805→   805→  ctx.fillStyle = "#b03a30";
+   806→   806→  ctx.save();
+   807→   807→  ctx.translate(24, 30);
+   808→   808→  ctx.rotate(-0.42);
+   809→   809→  ctx.fillRect(-2, 0, 4, 9);
+   810→   810→  ctx.fillRect(-2, 16, 4, 9);
+   811→   811→  ctx.restore();
+   812→   812→  // Base grime.
+   813→   813→  const bg = ctx.createLinearGradient(0, h * 0.72, 0, h);
+   814→   814→  bg.addColorStop(0, "rgba(28,26,20,0)");
+   815→   815→  bg.addColorStop(1, "rgba(28,26,20,0.5)");
+   816→   816→  ctx.fillStyle = bg;
+   817→   817→  ctx.fillRect(0, h * 0.72, w, h * 0.28);
+   818→   818→}
+   819→   819→
+   820→   820→function bakeStructure(index: number): HTMLCanvasElement {
+   821→   821→  const b = OBSTACLES[index];
+   822→   822→  const H = STRUCT_HEIGHTS[index];
+   823→   823→  const [c, ctx] = makeCanvas(b.w, H);
+   824→   824→  switch (index) {
+   825→   825→    case 0:
+   826→   826→      brickWallFace(ctx, b.w, H, 0xB100 + 7);
+   827→   827→      break;
+   828→   828→    case 1:
+   829→   829→      brickWallFace(ctx, b.w, H, 0xB200 + 11);
+   830→   830→      break;
+   831→   831→    case 2:
+   832→   832→      kioskFace(ctx, b.w, H, 0xC200 + 3);
+   833→   833→      break;
+   834→   834→    case 3:
+   835→   835→      restaurantFace(ctx, b.w, H, 0xD300 + 5);
+   836→   836→      break;
+   837→   837→    default:
+   838→   838→      cabinFace(ctx, b.w, H, 0xE400 + 9);
+   839→   839→  }
+   840→   840→  return c;
+   841→   841→}
+   842→   842→
+   843→   843→/**
+   844→   844→ * Draw the themed cover for OBSTACLES[index]: baked front face + live top
+   845→   845→ * face (footprint) + ground shadow. Fully decorative — collisions unchanged.
+   846→   846→ */
+   847→   847→export function drawStructure(
+   848→   848→  ctx: CanvasRenderingContext2D,
+   849→   849→  index: number,
+   850→   850→  b: AABB,
+   851→   851→): void {
+   852→   852→  const bk = getBaked();
+   853→   853→  const H = STRUCT_HEIGHTS[index];
+   854→   854→  const yFar = localY(b.y) + ENV_HORIZON;
+   855→   855→  const yNear = localY(b.y + b.h) + ENV_HORIZON;
+   856→   856→
+   857→   857→  // Ground shadow puddle in front.
+   858→   858→  ctx.fillStyle = C.shadow;
+   859→   859→  ctx.beginPath();
+   860→   860→  ctx.ellipse(b.x + b.w / 2, yNear + 5, b.w * 0.55, 10, 0, 0, Math.PI * 2);
+   861→   861→  ctx.fill();
+   862→   862→
+   863→   863→  // Front face (baked art).
+   864→   864→  ctx.drawImage(bk.structures[index], b.x, yNear - H);
+   865→   865→
+   866→   866→  // Top face — weathered roof/deck between the far and near edges.
+   867→   867→  const topH = yNear - yFar;
+   868→   868→  const roofG = ctx.createLinearGradient(0, yFar - H, 0, yFar - H + topH);
+   869→   869→  if (index === 3) {
+   870→   870→    roofG.addColorStop(0, "#77726a");
+   871→   871→    roofG.addColorStop(1, "#5d5850");
+   872→   872→  } else if (index === 0 || index === 1) {
+   873→   873→    roofG.addColorStop(0, "#8a8578");
+   874→   874→    roofG.addColorStop(1, "#6e6a5e");
+   875→   875→  } else {
+   876→   876→    roofG.addColorStop(0, C.tin);
+   877→   877→    roofG.addColorStop(1, C.tinDark);
+   878→   878→  }
+   879→   879→  ctx.fillStyle = roofG;
+   880→   880→  ctx.fillRect(b.x, yFar - H, b.w, topH);
+   881→   881→  // Roof clutter: gravel speckle + vents / broken tiles.
+   882→   882→  const rand = rng32(0x71EF + index * 41);
+   883→   883→  ctx.fillStyle = "rgba(255,255,255,0.07)";
+   884→   884→  for (let k = 0; k < 40; k++) {
+   885→   885→    ctx.fillRect(b.x + rand() * b.w, yFar - H + rand() * topH, 2, 1.4);
+   886→   886→  }
+   887→   887→  if (index === 3) {
+   888→   888→    // Water tank + vent pipe on the restaurant roof.
+   889→   889→    ctx.fillStyle = "#3c4044";
+   890→   890→    ctx.fillRect(b.x + 12, yFar - H - 9, 22, 11);
+   891→   891→    ctx.fillStyle = "#565b60";
+   892→   892→    ctx.fillRect(b.x + 12, yFar - H - 11, 22, 3);
+   893→   893→    ctx.strokeStyle = "#4a4e52";
+   894→   894→    ctx.lineWidth = 3;
+   895→   895→    ctx.beginPath();
+   896→   896→    ctx.moveTo(b.x + b.w - 30, yFar - H);
+   897→   897→    ctx.lineTo(b.x + b.w - 30, yFar - H - 14);
+   898→   898→    ctx.stroke();
+   899→   899→    // Parapet edge.
+   900→   900→    ctx.fillStyle = "#8a8478";
+   901→   901→    ctx.fillRect(b.x, yFar - H + topH - 3, b.w, 3);
+   902→   902→  } else if (index >= 2) {
+   903→   903→    // Corrugated ribs on the tin roofs.
+   904→   904→    ctx.strokeStyle = "rgba(255,255,255,0.10)";
+   905→   905→    ctx.lineWidth = 1.2;
+   906→   906→    ctx.beginPath();
+   907→   907→    for (let rx = b.x + 6; rx < b.x + b.w; rx += 9) {
+   908→   908→      ctx.moveTo(rx, yFar - H);
+   909→   909→      ctx.lineTo(rx, yFar - H + topH);
+   910→   910→    }
+   911→   911→    ctx.stroke();
+   912→   912→  } else {
+   913→   913→    // Rubble along the wall top.
+   914→   914→    for (let k = 0; k < 12; k++) {
+   915→   915→      ctx.fillStyle = rand() < 0.5 ? "#6a4030" : "#7c4a38";
+   916→   916→      const rx = b.x + rand() * b.w;
+   917→   917→      ctx.fillRect(rx, yFar - H - 2 - rand() * 4, 4 + rand() * 5, 3 + rand() * 3);
+   918→   918→    }
+   919→   919→  }
+   920→   920→  // Rebar on the broken brick walls.
+   921→   921→  if (index <= 1) {
+   922→   922→    ctx.strokeStyle = "#3a2c22";
+   923→   923→    ctx.lineWidth = 1.6;
+   924→   924→    ctx.beginPath();
+   925→   925→    for (let k = 0; k < 5; k++) {
+   926→   926→      const rx = b.x + 20 + rand() * (b.w - 40);
+   927→   927→      const rh = 6 + rand() * 10;
+   928→   928→      ctx.moveTo(rx, yFar - H);
+   929→   929→      ctx.lineTo(rx + 2, yFar - H - rh);
+   930→   930→    }
+   931→   931→    ctx.stroke();
+   932→   932→  }
+   933→   933→  // Outline for readability.
+   934→   934→  ctx.strokeStyle = "rgba(15,12,10,0.55)";
+   935→   935→  ctx.lineWidth = 1.4;
+   936→   936→  ctx.strokeRect(b.x, yFar - H, b.w, topH + H);
+   937→   937→}
+   938→   938→
+   939→   939→// ------------------------------------------------------------------- scenery
+   940→   940→
+   941→   941→function drawTree(ctx: CanvasRenderingContext2D, d: Decor, t: number): void {
+   942→   942→  const ax = d.x;
+   943→   943→  const ay = ENV_HORIZON + localY(d.y);
+   944→   944→  const S = 52 * d.scale;
+   945→   945→  const sway = Math.sin(t * 1.1 + d.variant * 1.7) * 0.028 + Math.sin(t * 2.3 + d.variant) * 0.012;
+   946→   946→
+   947→   947→  // Shadow.
+   948→   948→  ctx.fillStyle = "rgba(10,12,8,0.4)";
+   949→   949→  ctx.beginPath();
+   950→   950→  ctx.ellipse(ax + 6, ay + 3, S * 0.55, S * 0.14, 0, 0, Math.PI * 2);
+   951→   951→  ctx.fill();
+   952→   952→
+   953→   953→  const lean = sway * S;
+   954→   954→  if (d.dead) {
+   955→   955→    // Bare dead tree — recursive-ish branches.
+   956→   956→    ctx.strokeStyle = C.deadWood;
+   957→   957→    ctx.lineCap = "round";
+   958→   958→    ctx.lineWidth = S * 0.09;
+   959→   959→    ctx.beginPath();
+   960→   960→    ctx.moveTo(ax, ay);
+   961→   961→    const topX = ax + lean;
+   962→   962→    const topY = ay - S * 1.75;
+   963→   963→    ctx.quadraticCurveTo(ax + S * 0.06, ay - S * 0.9, topX, topY);
+   964→   964→    ctx.stroke();
+   965→   965→    const branch = (
+   966→   966→      x0: number, y0: number, ang: number, len: number, w: number, depth: number,
+   967→   967→    ): void => {
+   968→   968→      if (depth === 0 || len < 4) return;
+   969→   969→      const x1 = x0 + Math.cos(ang) * len;
+   970→   970→      const y1 = y0 + Math.sin(ang) * len;
+   971→   971→      ctx.lineWidth = w;
+   972→   972→      ctx.beginPath();
+   973→   973→      ctx.moveTo(x0, y0);
+   974→   974→      ctx.lineTo(x1, y1);
+   975→   975→      ctx.stroke();
+   976→   976→      branch(x1, y1, ang - 0.42 - sway * 0.4, len * 0.68, w * 0.6, depth - 1);
+   977→   977→      branch(x1, y1, ang + 0.38 + sway * 0.4, len * 0.66, w * 0.6, depth - 1);
+   978→   978→    };
+   979→   979→    const tipX = ax + lean;
+   980→   980→    const tipY = ay - S * 1.75;
+   981→   981→    branch(tipX, tipY + S * 0.35, -Math.PI / 2 - 0.65 + sway, S * 0.5, S * 0.06, 3);
+   982→   982→    branch(tipX, tipY + S * 0.55, -Math.PI / 2 + 0.6 + sway, S * 0.55, S * 0.07, 3);
+   983→   983→    branch(tipX, tipY + S * 0.15, -Math.PI / 2 + 0.18 + sway * 0.5, S * 0.4, S * 0.05, 2);
+   984→   984→    return;
+   985→   985→  }
+   986→   986→
+   987→   987→  // Living tree: trunk + layered canopy blobs.
+   988→   988→  ctx.strokeStyle = "#3e332a";
+   989→   989→  ctx.lineCap = "round";
+   990→   990→  ctx.lineWidth = S * 0.13;
+   991→   991→  ctx.beginPath();
+   992→   992→  ctx.moveTo(ax, ay);
+   993→   993→  ctx.quadraticCurveTo(ax + S * 0.05, ay - S * 0.8, ax + lean, ay - S * 1.35);
+   994→   994→  ctx.stroke();
+   995→   995→  // Branch stubs.
+   996→   996→  ctx.lineWidth = S * 0.06;
+   997→   997→  ctx.beginPath();
+   998→   998→  ctx.moveTo(ax + S * 0.02, ay - S * 0.85);
+   999→   999→  ctx.lineTo(ax - S * 0.34 + lean * 0.6, ay - S * 1.15);
+  1000→  1000→  ctx.moveTo(ax + S * 0.03, ay - S * 1.0);
+  1001→  1001→  ctx.lineTo(ax + S * 0.38 + lean * 0.6, ay - S * 1.28);
+  1002→  1002→  ctx.stroke();
+  1003→  1003→
+  1004→  1004→  const cy = ay - S * 1.62;
+  1005→  1005→  const cx = ax + lean * 1.6;
+  1006→  1006→  const blobs: [number, number, number][] = [
+  1007→  1007→    [0, 0, 0.62],
+  1008→  1008→    [-0.42, 0.16, 0.44],
+  1009→  1009→    [0.44, 0.12, 0.46],
+  1010→  1010→    [-0.18, -0.3, 0.4],
+  1011→  1011→    [0.24, -0.26, 0.38],
+  1012→  1012→  ];
+  1013→  1013→  for (const [ox, oy, r] of blobs) {
+  1014→  1014→    ctx.fillStyle = C.leafDark;
+  1015→  1015→    ctx.beginPath();
+  1016→  1016→    ctx.ellipse(cx + ox * S, cy + oy * S, r * S, r * S * 0.86, 0, 0, Math.PI * 2);
+  1017→  1017→    ctx.fill();
+  1018→  1018→  }
+  1019→  1019→  for (const [ox, oy, r] of blobs) {
+  1020→  1020→    ctx.fillStyle = C.leaf;
+  1021→  1021→    ctx.beginPath();
+  1022→  1022→    ctx.ellipse(cx + ox * S - 1.5, cy + oy * S - 2.5, r * S * 0.9, r * S * 0.76, 0, 0, Math.PI * 2);
+  1023→  1023→    ctx.fill();
+  1024→  1024→  }
+  1025→  1025→  // Sun-side highlights.
+  1026→  1026→  for (const [ox, oy, r] of blobs) {
+  1027→  1027→    ctx.fillStyle = C.leafLight;
+  1028→  1028→    ctx.beginPath();
+  1029→  1029→    ctx.ellipse(cx + ox * S + r * S * 0.24, cy + oy * S - r * S * 0.3, r * S * 0.42, r * S * 0.3, 0, 0, Math.PI * 2);
+  1030→  1030→    ctx.fill();
+  1031→  1031→  }
+  1032→  1032→}
+  1033→  1033→
+  1034→  1034→function drawBush(ctx: CanvasRenderingContext2D, d: Decor, t: number): void {
+  1035→  1035→  const ax = d.x;
+  1036→  1036→  const ay = ENV_HORIZON + localY(d.y);
+  1037→  1037→  const S = 20 * d.scale;
+  1038→  1038→  const sway = Math.sin(t * 1.6 + d.variant * 2.1) * 0.05;
+  1039→  1039→
+  1040→  1040→  ctx.fillStyle = "rgba(10,12,8,0.35)";
+  1041→  1041→  ctx.beginPath();
+  1042→  1042→  ctx.ellipse(ax, ay + 2, S * 1.1, S * 0.24, 0, 0, Math.PI * 2);
+  1043→  1043→  ctx.fill();
+  1044→  1044→
+  1045→  1045→  const blobs: [number, number, number][] = [
+  1046→  1046→    [-0.6, -0.2, 0.62],
+  1047→  1047→    [0.55, -0.15, 0.58],
+  1048→  1048→    [0, -0.5, 0.66],
+  1049→  1049→  ];
+  1050→  1050→  for (const [ox, oy, r] of blobs) {
+  1051→  1051→    ctx.fillStyle = C.leafDark;
+  1052→  1052→    ctx.beginPath();
+  1053→  1053→    ctx.ellipse(ax + ox * S * (1 + sway), ay - oy * S, r * S, r * S * 0.78, 0, 0, Math.PI * 2);
+  1054→  1054→    ctx.fill();
+  1055→  1055→  }
+  1056→  1056→  for (const [ox, oy, r] of blobs) {
+  1057→  1057→    ctx.fillStyle = C.leaf;
+  1058→  1058→    ctx.beginPath();
+  1059→  1059→    ctx.ellipse(ax + ox * S * (1 + sway) - 1, ay - oy * S - 1.5, r * S * 0.82, r * S * 0.6, 0, 0, Math.PI * 2);
+  1060→  1060→    ctx.fill();
+  1061→  1061→  }
+  1062→  1062→  ctx.fillStyle = C.leafLight;
+  1063→  1063→  ctx.beginPath();
+  1064→  1064→  ctx.ellipse(ax + S * 0.18, ay - S * 0.72, S * 0.34, S * 0.22, 0, 0, Math.PI * 2);
+  1065→  1065→  ctx.fill();
+  1066→  1066→}
+  1067→  1067→
+  1068→  1068→function drawRock(ctx: CanvasRenderingContext2D, d: Decor): void {
+  1069→  1069→  const ax = d.x;
+  1070→  1070→  const ay = ENV_HORIZON + localY(d.y);
+  1071→  1071→  const S = 9 * d.scale;
+  1072→  1072→  ctx.fillStyle = "rgba(10,12,8,0.35)";
+  1073→  1073→  ctx.beginPath();
+  1074→  1074→  ctx.ellipse(ax + 1, ay + 1.5, S * 1.15, S * 0.3, 0, 0, Math.PI * 2);
+  1075→  1075→  ctx.fill();
+  1076→  1076→  ctx.fillStyle = "#6c675c";
+  1077→  1077→  ctx.beginPath();
+  1078→  1078→  ctx.moveTo(ax - S, ay);
+  1079→  1079→  ctx.lineTo(ax - S * 0.6, ay - S * 0.85);
+  1080→  1080→  ctx.lineTo(ax + S * 0.2, ay - S);
+  1081→  1081→  ctx.lineTo(ax + S, ay - S * 0.35);
+  1082→  1082→  ctx.lineTo(ax + S * 0.9, ay);
+  1083→  1083→  ctx.closePath();
+  1084→  1084→  ctx.fill();
+  1085→  1085→  ctx.fillStyle = "#847e70";
+  1086→  1086→  ctx.beginPath();
+  1087→  1087→  ctx.moveTo(ax - S * 0.6, ay - S * 0.85);
+  1088→  1088→  ctx.lineTo(ax + S * 0.2, ay - S);
+  1089→  1089→  ctx.lineTo(ax + S * 0.3, ay - S * 0.5);
+  1090→  1090→  ctx.closePath();
+  1091→  1091→  ctx.fill();
+  1092→  1092→}
+  1093→  1093→
+  1094→  1094→/** Draw one scenery prop (sway animated by t). */
+  1095→  1095→export function drawDecor(ctx: CanvasRenderingContext2D, d: Decor, t: number): void {
+  1096→  1096→  if (d.kind === "tree") drawTree(ctx, d, t);
+  1097→  1097→  else if (d.kind === "bush") drawBush(ctx, d, t);
+  1098→  1098→  else drawRock(ctx, d);
+  1099→  1099→}
+  1100→  1100→
+  1101→  1101→// ------------------------------------------------------------------ ambience
+  1102→  1102→
+  1103→  1103→interface Cloud {
+  1104→  1104→  x: number;
+  1105→  1105→  y: number;
+  1106→  1106→  s: number;
+  1107→  1107→  v: number;
+  1108→  1108→}
+  1109→  1109→let clouds: Cloud[] | null = null;
+  1110→  1110→
+  1111→  1111→function getClouds(): Cloud[] {
+  1112→  1112→  if (clouds) return clouds;
+  1113→  1113→  const rand = rng32(0xC10D);
+  1114→  1114→  clouds = Array.from({ length: 6 }, () => ({
+  1115→  1115→    x: rand() * WORLD_W,
+  1116→  1116→    y: 14 + rand() * 120,
+  1117→  1117→    s: 0.6 + rand() * 1.1,
+  1118→  1118→    v: 4 + rand() * 7,
+  1119→  1119→  }));
+  1120→  1120→  return clouds;
+  1121→  1121→}
+  1122→  1122→
+  1123→  1123→function drawCloud(ctx: CanvasRenderingContext2D, c: Cloud, t: number): void {
+  1124→  1124→  const x = ((c.x + t * c.v) % (WORLD_W + 260)) - 130;
+  1125→  1125→  const y = c.y;
+  1126→  1126→  const s = c.s;
+  1127→  1127→  ctx.fillStyle = "rgba(160,138,118,0.14)";
+  1128→  1128→  ctx.beginPath();
+  1129→  1129→  ctx.ellipse(x, y, 60 * s, 14 * s, 0, 0, Math.PI * 2);
+  1130→  1130→  ctx.ellipse(x + 34 * s, y - 8 * s, 40 * s, 12 * s, 0, 0, Math.PI * 2);
+  1131→  1131→  ctx.ellipse(x - 36 * s, y + 3 * s, 34 * s, 10 * s, 0, 0, Math.PI * 2);
+  1132→  1132→  ctx.fill();
+  1133→  1133→}
+  1134→  1134→
+  1135→  1135→function drawBirds(ctx: CanvasRenderingContext2D, t: number): void {
+  1136→  1136→  ctx.strokeStyle = "rgba(30,24,20,0.7)";
+  1137→  1137→  ctx.lineWidth = 1.6;
+  1138→  1138→  for (let b = 0; b < 5; b++) {
+  1139→  1139→    const bx = ((b * 173 + t * (16 + b * 3)) % (WORLD_W + 140)) - 70;
+  1140→  1140→    const by = 44 + b * 13 + Math.sin(t * 2 + b) * 5;
+  1141→  1141→    const flap = Math.sin(t * 7 + b * 1.9) * 3;
+  1142→  1142→    ctx.beginPath();
+  1143→  1143→    ctx.moveTo(bx - 5, by - flap);
+  1144→  1144→    ctx.quadraticCurveTo(bx, by + 2, bx + 5, by - flap);
+  1145→  1145→    ctx.stroke();
+  1146→  1146→  }
+  1147→  1147→}
+  1148→  1148→
+  1149→  1149→// ----------------------------------------------------------------- composite
+  1150→  1150→
+  1151→  1151→/** Blit the baked sky; then live clouds + birds. */
+  1152→  1152→export function drawSky(ctx: CanvasRenderingContext2D, t: number): void {
+  1153→  1153→  ctx.drawImage(getBaked().sky, 0, 0);
+  1154→  1154→  for (const c of getClouds()) drawCloud(ctx, c, t);
+  1155→  1155→  drawBirds(ctx, t);
+  1156→  1156→}
+  1157→  1157→
+  1158→  1158→/** Blit the baked ground (roads, paths, scatter, curbs). */
+  1159→  1159→export function drawGround(ctx: CanvasRenderingContext2D): void {
+  1160→  1160→  ctx.drawImage(getBaked().ground, 0, ENV_HORIZON);
+  1161→  1161→}
+  1162→  1162→
