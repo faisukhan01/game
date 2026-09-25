@@ -6,8 +6,9 @@ import '../game/voidstrike_game.dart';
 import 'hud.dart' show ActionButton, HudOverlay, VirtualStick;
 import 'protocol_shim.dart';
 
-/// Match screen: side-view game canvas with a follow camera + twin-stick
-/// touch controls (left = move, right = aim) + FIRE / DASH / NOVA buttons.
+/// Match screen: GTA-style third-person game canvas with drag-look,
+/// a move stick (camera-relative) and FIRE / DASH / NOVA buttons. Aiming
+/// is where the camera looks, with a soft snap onto visible hostiles.
 class MatchScreen extends StatelessWidget {
   const MatchScreen({super.key, required this.callsign, required this.onResult});
 
@@ -29,19 +30,23 @@ class MatchScreen extends StatelessWidget {
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          // Game canvas (desktop hover aim still works via mouse).
+          // Game canvas: drag anywhere to look (mouse hover aims on desktop).
           Positioned.fill(
-            child: MouseRegion(
-              onHover: (e) {
-                game.aimFromScreen(e.localPosition, MediaQuery.sizeOf(context));
-                game.noteManualAim();
-              },
-              child: GameWidget(game: game),
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onPanUpdate: (d) => game.rotateLook(d.delta.dx),
+              child: MouseRegion(
+                onHover: (e) {
+                  game.aimFromScreen(e.localPosition);
+                  game.noteManualAim();
+                },
+                child: GameWidget(game: game),
+              ),
             ),
           ),
           // HUD.
           HudOverlay(game: game, callsign: callsign),
-          // Move stick — bottom left.
+          // Move stick — bottom left (camera-relative).
           Positioned(
             left: 16 + pad.left,
             bottom: 16 + pad.bottom,
@@ -51,22 +56,6 @@ class MatchScreen extends StatelessWidget {
               onMove: (x, y) {
                 game.moveX = x;
                 game.moveY = y;
-              },
-            ),
-          ),
-          // Aim stick — bottom right, inboard of the action buttons.
-          Positioned(
-            right: 96 + pad.right,
-            bottom: 16 + pad.bottom,
-            child: VirtualStick(
-              label: 'AIM',
-              color: flare,
-              onMove: (x, y) {
-                if (x != 0 || y != 0) {
-                  game.aimX = x;
-                  game.aimY = y;
-                  game.noteManualAim();
-                }
               },
             ),
           ),
