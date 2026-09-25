@@ -595,7 +595,7 @@ class VoidstrikeGame extends FlameGame {
             player.x <= ob[0] + ob[2] &&
             player.y >= ob[1] - 24 &&
             player.y <= ob[1] + ob[3]) {
-          canvas.saveLayer(null, Paint()..alpha = 0.42);
+          canvas.saveLayer(null, Paint()..color = const Color(0x6B000000));
           _paintSoldierOf(canvas, player, isPlayer: true);
           canvas.restore();
         }

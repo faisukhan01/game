@@ -86,7 +86,6 @@ const ui.Color _cGrassMid = ui.Color(0xFF4C5039);
 const ui.Color _cGrassNear = ui.Color(0xFF3B402D);
 const ui.Color _cRoad = ui.Color(0xFF43444A);
 const ui.Color _cRoadEdge = ui.Color(0xFF5A5B60);
-const ui.Color _cRoadDash = ui.Color(0xFF9A947E);
 const ui.Color _cWood = ui.Color(0xFF6B5138);
 const ui.Color _cWoodLight = ui.Color(0xFF836546);
 const ui.Color _cBrick = ui.Color(0xFF7A4A38);
@@ -181,9 +180,7 @@ ui.Picture _bakeSky() {
   const w = VsWorld.width;
   const h = kHorizon;
   final recorder = ui.PictureRecorder();
-  final c = recorder.beginRecording(
-    const ui.Rect.fromLTWH(0, -_skyExtent, w, _skyExtent),
-  );
+  final c = ui.Canvas(recorder, const ui.Rect.fromLTWH(0, -_skyExtent, w, _skyExtent));
   // Cover the whole band so nothing ever shows through the top (the camera
   // rarely scrolls this high, but keep it opaque).
   c.drawRect(
@@ -348,7 +345,7 @@ ui.Picture _bakeGround() {
   const w = VsWorld.width;
   final h = _groundH;
   final recorder = ui.PictureRecorder();
-  final c = recorder.beginRecording(ui.Rect.fromLTWH(0, 0, w, h));
+  final c = ui.Canvas(recorder, ui.Rect.fromLTWH(0, 0, w, h));
   final rand = _Rng(0x600D13);
 
   // Dry park grass — slightly darker toward the camera.
@@ -1144,7 +1141,7 @@ void _cabinFace(ui.Canvas c, double w, double h, int seed) {
 ui.Picture _bakeStructure(int index, double w) {
   final h = kStructHeights[index];
   final recorder = ui.PictureRecorder();
-  final c = recorder.beginRecording(ui.Rect.fromLTWH(0, 0, w, h));
+  final c = ui.Canvas(recorder, ui.Rect.fromLTWH(0, 0, w, h));
   switch (index) {
     case 0:
       _brickWallFace(c, w, h, 0xB100 + 7);
