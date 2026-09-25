@@ -1,15 +1,16 @@
 /**
- * VOIDSTRIKE — arena renderer (2.5D side view).
+ * VOIDSTRIKE — arena renderer (2.5D side view, "OLD TOWN PARK" theme).
  *
  * The sim is top-down; this module projects the floor plane with a fixed
- * camera pitch and draws an upright billboard world: perspective grid,
- * extruded cover boxes, and side-view soldier rigs with rifles, all
- * depth-sorted by their floor y. Canvas transform (letterbox scale × DPR)
- * is applied by the game loop; this module only draws.
+ * camera pitch and draws a natural dusk arena: baked sky + derelict skyline,
+ * park ground with roads and paths, themed abandoned cover (boundary walls,
+ * restaurant, kiosk, guard cabin), swaying scenery and side-view soldier
+ * rigs with rifles — all depth-sorted by their floor y. Canvas transform
+ * (letterbox scale × DPR) is applied by the game loop; this module only
+ * draws. Cover collision footprints are never altered here.
  */
 
-import { OBSTACLES, WORLD_H, WORLD_W } from "@/lib/sim/constants";
-import type { AABB } from "@/lib/sim/types";
+import { OBSTACLES } from "@/lib/sim/constants";
 import type { World } from "@/lib/sim/world";
 import {
   drawFighter,
@@ -24,68 +25,28 @@ import {
   VISUAL_SCALE,
 } from "./characters";
 import { Effects, FX_COLORS } from "./effects";
+import {
+  DECOR,
+  drawDecor,
+  drawGround,
+  drawSky,
+  drawStructure,
+} from "./environment";
 
-const GRID = 24;
-/** Tilted floor rectangle in screen space. */
-const FLOOR_Y = 238; // groundY(0)
-const FLOOR_H = WORLD_H * TILT;
-
-function strokeCornerTicks(ctx: CanvasRenderingContext2D): void {
-  // 18px volt L-ticks on the arena corners — angular brand motif.
-  const L = 18;
-  ctx.strokeStyle = "rgba(200,243,29,0.55)";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(0, FLOOR_Y + L); ctx.lineTo(0, FLOOR_Y); ctx.lineTo(L, FLOOR_Y);
-  ctx.moveTo(WORLD_W - L, FLOOR_Y); ctx.lineTo(WORLD_W, FLOOR_Y); ctx.lineTo(WORLD_W, FLOOR_Y + L);
-  ctx.moveTo(WORLD_W, FLOOR_Y + FLOOR_H - L); ctx.lineTo(WORLD_W, FLOOR_Y + FLOOR_H); ctx.lineTo(WORLD_W - L, FLOOR_Y + FLOOR_H);
-  ctx.moveTo(L, FLOOR_Y + FLOOR_H); ctx.lineTo(0, FLOOR_Y + FLOOR_H); ctx.lineTo(0, FLOOR_Y + FLOOR_H - L);
-  ctx.stroke();
-}
-
-/** Extruded cover box: footprint rect lifted by its world height. */
-function drawBox(ctx: CanvasRenderingContext2D, b: AABB): void {
-  const H = b.h * 1.32;
-  const yFar = groundY(b.y);
-  const yNear = groundY(b.y + b.h);
-  // Front face.
-  const grad = ctx.createLinearGradient(0, yNear - H, 0, yNear);
-  grad.addColorStop(0, "#151920");
-  grad.addColorStop(1, "#0A0C10");
-  ctx.fillStyle = grad;
-  ctx.fillRect(b.x, yNear - H, b.w, H);
-  // Top face.
-  ctx.fillStyle = "#1B2028";
-  ctx.fillRect(b.x, yFar - H, b.w, yNear - yFar);
-  // Silhouette + deck edge.
-  ctx.strokeStyle = "rgba(255,255,255,0.14)";
-  ctx.lineWidth = 1.4;
-  ctx.strokeRect(b.x, yFar - H, b.w, yNear - yFar + H);
-  ctx.strokeStyle = "rgba(255,255,255,0.22)";
-  ctx.beginPath();
-  ctx.moveTo(b.x, yNear - H);
-  ctx.lineTo(b.x + b.w, yNear - H);
-  ctx.stroke();
-  // Volt corner ticks on the deck.
-  ctx.strokeStyle = "rgba(200,243,29,0.5)";
-  ctx.lineWidth = 1.6;
-  const t = 9;
-  ctx.beginPath();
-  ctx.moveTo(b.x, yFar - H + t); ctx.lineTo(b.x, yFar - H); ctx.lineTo(b.x + t, yFar - H);
-  ctx.moveTo(b.x + b.w - t, yFar - H); ctx.lineTo(b.x + b.w, yFar - H); ctx.lineTo(b.x + b.w, yFar - H + t);
-  ctx.stroke();
-}
+/** Ambient scene clock (seconds) — drives sway, clouds and birds. */
+let sceneT = 0;
 
 interface Drawable {
   sortY: number;
-  kind: "box" | "bot" | "player";
-  box?: AABB;
+  kind: "structure" | "decor" | "bot" | "player";
+  structureIdx?: number;
+  decorIdx?: number;
   botIdx?: number;
 }
 
 /**
  * `dtSec` is the clamped real-frame delta used only for cosmetic animation
- * (facing smoothing, gait) — never for simulation.
+ * (facing smoothing, gait, ambience) — never for simulation.
  */
 export function renderGame(
   ctx: CanvasRenderingContext2D,
@@ -94,54 +55,18 @@ export function renderGame(
   monoFont: string,
   dtSec: number,
 ): void {
+  sceneT += dtSec;
+
   ctx.save();
 
   // Screenshake.
   ctx.translate(fx.shakeX, fx.shakeY);
 
-  // Void backdrop above the horizon.
-  ctx.fillStyle = "#07080A";
-  ctx.fillRect(-40, -40, WORLD_W + 80, FLOOR_Y + 41);
-  const sky = ctx.createLinearGradient(0, FLOOR_Y - 190, 0, FLOOR_Y);
-  sky.addColorStop(0, "rgba(200,243,29,0)");
-  sky.addColorStop(1, "rgba(200,243,29,0.05)");
-  ctx.fillStyle = sky;
-  ctx.fillRect(0, FLOOR_Y - 190, WORLD_W, 190);
+  // Sky (baked dusk + drifting clouds + birds) and park ground.
+  drawSky(ctx, sceneT);
+  drawGround(ctx);
 
-  // Tilted floor deck.
-  ctx.fillStyle = "#0B0D10";
-  ctx.fillRect(0, FLOOR_Y, WORLD_W, FLOOR_H);
-
-  // Perspective grid — verticals + depth-squashed horizontals.
-  ctx.strokeStyle = "rgba(255,255,255,0.05)";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (let x = GRID; x < WORLD_W; x += GRID) {
-    ctx.moveTo(x, FLOOR_Y);
-    ctx.lineTo(x, FLOOR_Y + FLOOR_H);
-  }
-  for (let y = GRID; y < WORLD_H; y += GRID) {
-    const gy = groundY(y);
-    ctx.moveTo(0, gy);
-    ctx.lineTo(WORLD_W, gy);
-  }
-  ctx.stroke();
-
-  // Horizon light strip.
-  ctx.strokeStyle = "rgba(200,243,29,0.16)";
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.moveTo(0, FLOOR_Y);
-  ctx.lineTo(WORLD_W, FLOOR_Y);
-  ctx.stroke();
-
-  // Arena border + corner ticks.
-  ctx.strokeStyle = "rgba(255,255,255,0.14)";
-  ctx.lineWidth = 1.5;
-  ctx.strokeRect(0, FLOOR_Y, WORLD_W, FLOOR_H);
-  strokeCornerTicks(ctx);
-
-  // Dash afterimages — soft energy blooms flat on the deck, newest on top.
+  // Dash afterimages — soft energy blooms flat on the ground, newest on top.
   for (const a of fx.afterimages) {
     if (a.life <= 0) continue;
     const k = a.life / 0.28;
@@ -153,7 +78,7 @@ export function renderGame(
   }
   ctx.globalAlpha = 1;
 
-  // Nova / wave rings — shockwaves ripple across the deck.
+  // Nova / wave rings — shockwaves ripple across the ground.
   for (const r of fx.rings) {
     if (r.life <= 0) continue;
     ctx.globalAlpha = (r.life / r.maxLife) * 0.8;
@@ -165,10 +90,16 @@ export function renderGame(
   }
   ctx.globalAlpha = 1;
 
-  // ---- depth-sorted world: cover boxes + operatives -----------------------
+  // ---- depth-sorted world: structures, scenery + operatives ----------------
   const pl = world.player;
   const items: Drawable[] = [];
-  for (const b of OBSTACLES) items.push({ sortY: b.y + b.h, kind: "box", box: b });
+  for (let i = 0; i < OBSTACLES.length; i++) {
+    const b = OBSTACLES[i];
+    items.push({ sortY: b.y + b.h, kind: "structure", structureIdx: i });
+  }
+  for (let i = 0; i < DECOR.length; i++) {
+    items.push({ sortY: DECOR[i].y, kind: "decor", decorIdx: i });
+  }
   for (let i = 0; i < world.bots.length; i++) {
     if (!world.bots[i].dead) items.push({ sortY: world.bots[i].y, kind: "bot", botIdx: i });
   }
@@ -176,8 +107,26 @@ export function renderGame(
   items.sort((p, q) => p.sortY - q.sortY);
 
   for (const it of items) {
-    if (it.kind === "box" && it.box) {
-      drawBox(ctx, it.box);
+    if (it.kind === "structure") {
+      const b = OBSTACLES[it.structureIdx!];
+      drawStructure(ctx, it.structureIdx!, b);
+      // X-ray ghost: if the striker is hidden behind this structure, draw a
+      // translucent silhouette over it so the player never loses themselves.
+      if (
+        !pl.dead &&
+        pl.x >= b.x &&
+        pl.x <= b.x + b.w &&
+        pl.y >= b.y - 24 &&
+        pl.y <= b.y + b.h
+      ) {
+        ctx.globalAlpha = 0.42;
+        drawFighter(ctx, pl, pl.aimX, pl.aimY, PALETTE_PLAYER, dtSec, { isPlayer: true });
+        ctx.globalAlpha = 1;
+      }
+      continue;
+    }
+    if (it.kind === "decor") {
+      drawDecor(ctx, DECOR[it.decorIdx!], sceneT);
       continue;
     }
     if (it.kind === "bot") {
@@ -199,7 +148,9 @@ export function renderGame(
         const w = 30;
         const frac = Math.max(0, b.hp / b.maxHp);
         const barY = groundY(b.y) - S * 2.06;
-        ctx.fillStyle = "rgba(255,255,255,0.10)";
+        ctx.fillStyle = "rgba(20,20,16,0.55)";
+        ctx.fillRect(b.x - w / 2 - 1, barY - 1, w + 2, 5);
+        ctx.fillStyle = "rgba(255,255,255,0.14)";
         ctx.fillRect(b.x - w / 2, barY, w, 3);
         ctx.fillStyle = "#FF3D5A";
         ctx.fillRect(b.x - w / 2, barY, w * frac, 3);
@@ -208,7 +159,7 @@ export function renderGame(
     }
     // Striker operative.
     const S = pl.radius * VISUAL_SCALE;
-    // Dash-ready ring on the deck under the boots.
+    // Dash-ready ring on the ground under the boots.
     ctx.globalAlpha = pl.dashCd <= 0 ? 0.4 : 0.12;
     ctx.strokeStyle = "#C8F31D";
     ctx.lineWidth = 1.5;
@@ -260,7 +211,7 @@ export function renderGame(
     );
   }
 
-  // Particles — debris hovers just above the deck; grouped per color.
+  // Particles — debris hovers just above the ground; grouped per color.
   for (let c = 0; c < FX_COLORS.length; c++) {
     ctx.fillStyle = FX_COLORS[c];
     let any = false;
@@ -287,7 +238,7 @@ export function renderGame(
   for (const f of fx.floaters) {
     if (f.life <= 0) continue;
     ctx.globalAlpha = Math.min(1, (f.life / f.maxLife) * 1.6);
-    ctx.strokeStyle = "rgba(7,8,10,0.9)";
+    ctx.strokeStyle = "rgba(24,22,16,0.9)";
     ctx.lineWidth = 3;
     const fy = groundY(f.y) - soldierChestLift(pl.radius) * 1.7;
     ctx.strokeText(f.text, f.x, fy);
